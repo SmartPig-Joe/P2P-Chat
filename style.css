@@ -1,0 +1,111 @@
+/* Base styles (keep these if not using Tailwind base) */
+body {
+    font-family: Inter, sans-serif; /* Match Tailwind config */
+}
+
+/* Add styles for Material Symbols */
+.material-symbols-outlined {
+  font-variation-settings:
+  'FILL' 0,
+  'wght' 400,
+  'GRAD' 0,
+  'opsz' 24;
+  font-size: 1.25rem; /* Match previous icon size */
+  line-height: 1;
+  vertical-align: middle;
+  display: inline-block; /* Ensure correct alignment */
+}
+
+/* 自定义滚动条样式 */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: #2f3136; /* discord-gray-3 */
+    border-radius: 10px;
+}
+::-webkit-scrollbar-thumb {
+    background: #202225; /* discord-gray-1 (darker) */
+    border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #1a1c1e; /* Even darker */
+}
+
+/* 正在输入动画 */
+.typing-dot {
+    animation: typing-bounce 1.2s infinite ease-in-out;
+    background-color: #949ba4; /* discord-text-muted */
+    border-radius: 50%;
+    width: 4px;
+    height: 4px;
+    margin: 0 1px;
+    display: inline-block;
+}
+.typing-dot:nth-child(2) {
+    animation-delay: 0.15s;
+}
+.typing-dot:nth-child(3) {
+    animation-delay: 0.3s;
+}
+
+@keyframes typing-bounce {
+    0%, 80%, 100% { transform: translateY(0); }
+    40% { transform: translateY(-3px); }
+}
+
+/* Additional custom styles if needed */
+
+/* Style for active channel link (can also be done with JS adding classes) */
+/* .channel-link.active {
+    background-color: #383a40; /* discord-gray-4 */
+/*    color: #dbdee1; /* discord-text-primary */
+/*    font-weight: 600;
+/* }
+*/
+
+/* Hide scrollbar buttons (optional) */
+::-webkit-scrollbar-button {
+    display: none;
+}
+
+/* Smooth scrolling for message list (optional, JS can handle this too) */
+#message-list {
+    scroll-behavior: smooth;
+}
+
+/* Slight transition for hover effects */
+.hover\:bg-discord-gray-4:hover,
+.hover\:text-white:hover,
+.hover\:rounded-2xl:hover,
+.group:hover .group-hover\:opacity-100,
+.group:hover .group-hover\:text-white,
+.message-item:hover .group-hover\:opacity-100 {
+    transition-property: background-color, color, border-radius, opacity;
+    transition-duration: 150ms; /* Faster than default */
+    transition-timing-function: ease-in-out;
+}
+
+/* Style for the reply line */
+.reply-line::before {
+    content: '';
+    position: absolute;
+    left: 20px; /* Adjust based on avatar size and spacing */
+    top: -8px; /* Adjust to align with the top of the reply text */
+    bottom: 24px; /* Adjust to end above the current message avatar */
+    width: 2px;
+    background-color: #4f545c; /* A slightly lighter gray */
+    border-radius: 1px;
+}
+
+/* Improve focus rings for accessibility */
+*:focus-visible {
+    outline: 2px solid #5865f2; /* discord-blurple */
+    outline-offset: 2px;
+}
+
+/* Ensure input doesn't get browser default outline when focused via JS */
+input:focus {
+    outline: none;
+} 

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Discord</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Link external CSS -->
+    <link rel="stylesheet" href="style.css">
+    <!-- Add Google Fonts link for Material Symbols -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <style>
+        /* Keep only non-font/non-lucide specific styles here if any, or move all to style.css */
+
+        /* 自定义滚动条样式 (These seem duplicated in style.css, could be removed later if confirmed) */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #2f3136;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #202225;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #1a1c1e;
+        }
+        /* 正在输入动画 (Also duplicated in style.css) */
+        .typing-dot {
+            animation: typing-bounce 1.2s infinite ease-in-out;
+            background-color: #949ba4; /* discord-text-muted */
+            border-radius: 50%;
+            width: 4px;
+            height: 4px;
+            margin: 0 1px;
+            display: inline-block;
+        }
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.15s;
+        }
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.3s;
+        }
+        @keyframes typing-bounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-3px); }
+        }
+    </style>
+    <script>
+        // Tailwind 配置 (Keep this inline for simplicity for now)
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'discord-gray-1': '#1e1f22',
+                        'discord-gray-2': '#2b2d31',
+                        'discord-gray-3': '#313338',
+                        'discord-gray-4': '#383a40',
+                        'discord-gray-5': '#404249',
+                        'discord-blurple': '#5865f2',
+                        'discord-text-primary': '#dbdee1',
+                        'discord-text-muted': '#949ba4',
+                        'discord-text-link': '#00a8fc',
+                        'discord-green': '#23a55a',
+                        'discord-red': '#f23f43',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    borderRadius: {
+                        'discord': '5px',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-discord-gray-1 text-discord-text-primary font-sans flex h-screen overflow-hidden">
+
+    <!-- 服务器列表 -->
+    <div class="flex flex-col items-center w-18 bg-discord-gray-1 p-2 space-y-3 overflow-y-auto flex-shrink-0">
+        <button class="bg-discord-gray-3 h-12 w-12 rounded-full flex items-center justify-center text-white hover:bg-discord-blurple hover:rounded-2xl transition-all duration-200 ease-out group" title="主页">
+            <span class="material-symbols-outlined text-2xl group-hover:text-white">home</span> <!-- Home Icon -->
+        </button>
+        <hr class="border-t-2 border-discord-gray-5 w-8 rounded-full">
+        <button class="bg-discord-gray-3 h-12 w-12 rounded-full flex items-center justify-center text-white hover:rounded-2xl transition-all duration-200 ease-out relative group server-icon active-server" title="服务器 1">
+            <img src="https://placehold.co/48x48/7289da/ffffff?text=S1" alt="服务器 1 图标" class="rounded-full object-cover h-full w-full" onerror="this.src='https://placehold.co/48x48/2c2f33/ffffff?text=Err'">
+             <span class="absolute -left-1 top-1/2 transform -translate-y-1/2 h-2 w-1 bg-white rounded-r-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 active-indicator"></span>
+        </button>
+        <button class="bg-discord-gray-3 h-12 w-12 rounded-2xl flex items-center justify-center text-white hover:rounded-2xl transition-all duration-200 ease-out relative group server-icon" title="服务器 2">
+            <img src="https://placehold.co/48x48/43b581/ffffff?text=S2" alt="服务器 2 图标" class="rounded-2xl object-cover h-full w-full" onerror="this.src='https://placehold.co/48x48/2c2f33/ffffff?text=Err'">
+            <span class="absolute -left-1 top-1/2 transform -translate-y-1/2 h-2 w-1 bg-white rounded-r-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 active-indicator"></span>
+        </button>
+        <button class="bg-discord-gray-3 h-12 w-12 rounded-full flex items-center justify-center text-discord-green hover:bg-discord-green hover:text-white hover:rounded-2xl transition-all duration-200 ease-out group" title="添加服务器">
+            <span class="material-symbols-outlined text-2xl group-hover:text-white">add</span> <!-- Plus Icon -->
+        </button>
+         <button class="bg-discord-gray-3 h-12 w-12 rounded-full flex items-center justify-center text-discord-green hover:bg-discord-green hover:text-white hover:rounded-2xl transition-all duration-200 ease-out group" title="探索公开服务器">
+            <span class="material-symbols-outlined text-2xl group-hover:text-white">compass_calibration</span> <!-- Compass Icon -->
+        </button>
+    </div>
+
+    <!-- 频道列表 -->
+    <div class="flex flex-col w-60 bg-discord-gray-2 flex-shrink-0">
+        <div class="h-12 px-3 shadow-md flex items-center justify-between border-b border-discord-gray-5 flex-shrink-0">
+            <h1 class="text-white font-semibold truncate">我的酷服务器</h1>
+            <button class="text-discord-text-muted hover:text-white" title="服务器设置">
+                 <span class="material-symbols-outlined text-lg">expand_more</span> <!-- Chevron Down Icon -->
+            </button>
+        </div>
+        <div class="flex-1 p-2 space-y-1 overflow-y-auto">
+            <!-- 文字频道 -->
+            <div class="px-1 pt-2 pb-1">
+                <h2 class="text-xs font-semibold uppercase text-discord-text-muted flex items-center justify-between">
+                    <span>文字频道</span>
+                    <button class="text-discord-text-muted hover:text-white" title="创建频道">
+                        <span class="material-symbols-outlined text-sm">add</span> <!-- Plus Icon -->
+                    </button>
+                </h2>
+            </div>
+            <a href="#" data-channel-name="综合" class="flex items-center px-2 py-1 text-discord-text-muted hover:bg-discord-gray-4 hover:text-discord-text-primary rounded-discord group channel-link">
+                 <span class="material-symbols-outlined mr-1.5 text-lg">tag</span> <!-- Hash/Tag Icon -->
+                <span class="channel-text-name truncate">综合</span>
+                <span class="material-symbols-outlined ml-auto text-xs opacity-0 group-hover:opacity-100" title="创建邀请">person_add</span> <!-- User Plus Icon -->
+                <span class="material-symbols-outlined ml-1 text-xs opacity-0 group-hover:opacity-100" title="编辑频道">settings</span> <!-- Settings Icon -->
+            </a>
+            <a href="#" data-channel-name="公告" class="flex items-center px-2 py-1 text-discord-text-muted hover:bg-discord-gray-4 hover:text-discord-text-primary rounded-discord group channel-link">
+                 <span class="material-symbols-outlined mr-1.5 text-lg">tag</span> <span class="channel-text-name truncate">公告</span>
+            </a>
+            <a href="#" data-channel-name="资源" class="flex items-center px-2 py-1 text-discord-text-muted hover:bg-discord-gray-4 hover:text-discord-text-primary rounded-discord group channel-link">
+                 <span class="material-symbols-outlined mr-1.5 text-lg">tag</span> <span class="channel-text-name truncate">资源</span>
+            </a>
+
+             <!-- 语音频道 -->
+             <div class="px-1 pt-4 pb-1">
+                <h2 class="text-xs font-semibold uppercase text-discord-text-muted flex items-center justify-between">
+                    <span>语音频道</span>
+                    <button class="text-discord-text-muted hover:text-white" title="创建频道">
+                         <span class="material-symbols-outlined text-sm">add</span> <!-- Plus Icon -->
+                    </button>
+                </h2>
+            </div>
+             <a href="#" data-channel-name="大厅" class="flex items-center px-2 py-1 text-discord-text-muted hover:bg-discord-gray-4 hover:text-discord-text-primary rounded-discord group channel-link">
+                 <span class="material-symbols-outlined mr-1.5 text-lg">volume_up</span> <!-- Volume 2 Icon -->
+                <span class="channel-text-name truncate">大厅</span>
+                 <span class="material-symbols-outlined ml-auto text-xs opacity-0 group-hover:opacity-100" title="创建邀请">person_add</span> <!-- User Plus Icon -->
+             </a>
+             <a href="#" data-channel-name="游戏" class="flex items-center px-2 py-1 text-discord-text-muted hover:bg-discord-gray-4 hover:text-discord-text-primary rounded-discord group channel-link">
+                 <span class="material-symbols-outlined mr-1.5 text-lg">volume_up</span> <span class="channel-text-name truncate">游戏</span>
+            </a>
+        </div>
+        <!-- 用户信息与控制 -->
+        <div class="h-14 bg-discord-gray-1/80 p-2 flex items-center justify-between flex-shrink-0">
+             <!-- User avatar remains image -->
+            <div class="flex items-center space-x-2 cursor-pointer group">
+                 <div class="relative">
+                    <img src="https://placehold.co/32x32/5865f2/ffffff?text=U" alt="用户头像" class="rounded-full" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
+                    <span class="absolute bottom-0 right-0 block h-3 w-3 bg-discord-green border-2 border-discord-gray-1/80 rounded-full"></span>
+                 </div>
+                <div>
+                    <div class="text-sm font-medium text-white group-hover:underline">用户名</div>
+                    <div class="text-xs text-discord-text-muted">#1234</div>
+                 </div>
+            </div>
+            <div class="flex items-center space-x-1 text-discord-text-muted">
+                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="麦克风静音"><span class="material-symbols-outlined text-base">mic_off</span></button> <!-- Mic Icon -->
+                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="耳机静音"><span class="material-symbols-outlined text-base">headset_off</span></button> <!-- Headphones Icon -->
+                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="用户设置"><span class="material-symbols-outlined text-base">settings</span></button> <!-- Settings Icon -->
+             </div>
+        </div>
+    </div>
+
+    <!-- 主聊天区 -->
+    <div class="flex-1 flex flex-col bg-discord-gray-3 overflow-hidden">
+        <!-- 聊天区顶部栏 -->
+        <div class="h-12 px-4 shadow-md flex items-center justify-between border-b border-discord-gray-5 flex-shrink-0">
+            <div class="flex items-center text-white space-x-4">
+                <div class="flex items-center">
+                     <span class="material-symbols-outlined mr-2 text-xl text-discord-text-muted">tag</span> <!-- Hash Icon -->
+                    <h2 id="channel-name" class="font-semibold">P2P 聊天</h2>
+                </div>
+                 <!-- Connection status remains text -->
+                 <div class="flex items-center space-x-2 text-sm">
+                     <span class="text-discord-text-muted">ID:</span>
+                     <span id="local-user-id" class="text-white font-mono" title="您的用户 ID">加载中...</span>
+                     <input type="text" id="remote-user-id-input" placeholder="对方 ID" class="bg-discord-gray-1 text-xs rounded px-1.5 py-0.5 w-24 focus:outline-none focus:ring-1 focus:ring-discord-blurple">
+                     <button id="connect-button" data-action="connect" class="text-white text-xs px-2 py-0.5 rounded transition-colors duration-150 ease-in-out bg-discord-green hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                         连接
+                     </button>
+                     <span id="connection-status" class="text-xs ml-2">未连接</span>
+                </div>
+            </div>
+            <div class="flex items-center space-x-3 text-discord-text-muted">
+                 <button class="hover:text-white" title="通知设置"><span class="material-symbols-outlined text-xl">notifications</span></button>
+                 <button class="hover:text-white" title="置顶消息"><span class="material-symbols-outlined text-xl">push_pin</span></button>
+                 <button id="member-list-toggle-button" class="hover:text-white md:hidden" title="成员列表">
+                     <span class="material-symbols-outlined text-xl">group</span>
+                </button>
+                <button class="hover:text-white hidden md:inline-block" title="成员列表">
+                     <span class="material-symbols-outlined text-xl">group</span>
+                </button>
+                 <div class="relative">
+                    <input type="text" placeholder="搜索" class="bg-discord-gray-1 text-sm rounded-discord px-2 py-0.5 w-36 focus:outline-none focus:ring-1 focus:ring-discord-blurple">
+                     <span class="material-symbols-outlined absolute right-1.5 top-1/2 transform -translate-y-1/2 text-sm">search</span>
+                 </div>
+                 <button class="hover:text-white" title="收件箱"><span class="material-symbols-outlined text-xl">inbox</span></button>
+                 <button class="hover:text-white" title="帮助"><span class="material-symbols-outlined text-xl">help</span></button>
+            </div>
+        </div>
+
+        <!-- 消息列表 -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-4" id="message-list">
+             <!-- Empty State Placeholder -->
+            <div id="empty-message-list" class="flex flex-col items-center justify-center h-full text-center text-discord-text-muted hidden">
+                 <span class="material-symbols-outlined text-6xl mb-4">forum</span> <!-- MessageSquareText Icon -> Forum -->
+                <h3 class="text-lg font-semibold text-discord-text-primary">还没有消息</h3>
+                <p class="text-sm">看起来这里很安静。开始对话或发送一个文件吧！</p>
+             </div>
+            <!-- Messages will be loaded here by JavaScript -->
+        </div>
+
+        <!-- 正在输入提示 -->
+        <div id="typing-indicator" class="px-4 pb-1 h-6 text-xs text-discord-text-muted items-center hidden">
+             <!-- Typing dots remain -->
+             <span class="mr-1">
+                <span class="typing-dot"></span>
+                <span class="typing-dot"></span>
+                <span class="typing-dot"></span>
+            </span>
+            <span id="typing-users">用户B</span> 正在输入...
+        </div>
+
+        <!-- 消息输入框 -->
+        <div class="px-4 pb-4 flex-shrink-0">
+            <div class="bg-discord-gray-4 rounded-lg flex items-center px-3">
+                <input type="file" id="file-input" class="hidden"> <!-- Hidden File Input -->
+                <button id="upload-button" class="text-discord-text-muted hover:text-white mr-2" title="上传文件">
+                     <span class="material-symbols-outlined text-xl bg-discord-gray-5 p-1 rounded-full">add_circle</span> <!-- Plus Icon in circle -->
+                </button>
+                <input type="text" id="message-input" placeholder="在 #综合 中发送消息" class="flex-1 bg-transparent py-2.5 text-sm text-discord-text-primary placeholder-discord-text-muted focus:outline-none">
+                 <button class="text-discord-text-muted hover:text-white ml-2" title="赠送礼物"><span class="material-symbols-outlined text-xl">card_giftcard</span></button> <!-- Gift Icon -->
+                 <button class="text-discord-text-muted hover:text-white ml-2" title="GIF"><span class="material-symbols-outlined text-xl">gif_box</span></button> <!-- GIF Icon -->
+                 <button class="text-discord-text-muted hover:text-white ml-2" title="表情"><span class="material-symbols-outlined text-xl">mood</span></button> <!-- Smile Icon -->
+             </div>
+        </div>
+    </div>
+
+    <!-- 成员列表 (右侧边栏) -->
+    <div id="member-list-sidebar" class="w-60 bg-discord-gray-2 p-3 space-y-4 border-l border-discord-gray-5 overflow-y-auto hidden md:block flex-shrink-0">
+         <!-- User list remains text/images -->
+         <div>
+            <h3 class="text-xs font-semibold uppercase text-discord-text-muted mb-2">在线 - <span id="online-count">0</span></h3>
+            <div class="space-y-2">
+                <!-- Online users loaded here -->
+            </div>
+        </div>
+         <div>
+            <h3 class="text-xs font-semibold uppercase text-discord-text-muted mb-2">离线 - <span id="offline-count">0</span></h3>
+             <div class="space-y-2">
+                <!-- Offline users loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Link external JavaScript -->
+    <script src="script.js"></script>
+</body>
+</html>
