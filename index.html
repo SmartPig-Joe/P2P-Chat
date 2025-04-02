@@ -82,23 +82,27 @@
 
     <!-- 联系人列表 -->
     <div class="flex flex-col w-60 bg-discord-gray-2 flex-shrink-0">
-        <!-- 顶部留空或添加搜索框 -->
-        <div class="h-12 px-3 shadow-md flex items-center justify-between border-b border-discord-gray-5 flex-shrink-0">
-             <h2 class="text-white font-semibold truncate">联系人</h2>
-             <!-- 可以添加一个 "添加联系人" 或 "查找用户" 的按钮 -->
-             <!-- <button class="text-discord-text-muted hover:text-white" title="查找用户">
-                 <span class="material-symbols-outlined text-lg">search</span>
-             </button> -->
+        <!-- 添加联系人区域 -->
+        <div class="p-2 border-b border-discord-gray-5 flex-shrink-0">
+            <div class="flex items-center space-x-1">
+                <input type="text" id="add-contact-input" placeholder="输入对方 Peer ID" class="flex-1 bg-discord-gray-1 text-xs rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-discord-blurple">
+                <button id="add-contact-button" class="p-1 rounded bg-discord-blurple hover:bg-blue-600 text-white" title="添加联系人">
+                    <span class="material-symbols-outlined text-base">add</span>
+                </button>
+            </div>
         </div>
         <!-- 联系人列表容器 -->
         <div id="contacts-list-container" class="flex-1 p-2 space-y-1 overflow-y-auto">
             <!-- 联系人将由 JavaScript 动态填充 -->
             <!-- 示例联系人项 (将被 JS 替换) -->
             <!--
-            <a href="#" data-peer-id="user-example" class="flex items-center px-2 py-1.5 text-discord-text-muted hover:bg-discord-gray-4 hover:text-discord-text-primary rounded-discord group contact-item">
-                <img src="https://placehold.co/32x32/7289da/ffffff?text=U" alt="用户头像" class="rounded-full mr-2 flex-shrink-0" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
+            <a href="#" data-peer-id="user-example" class="contact-item flex items-center px-2 py-1.5 text-discord-text-muted hover:bg-discord-gray-4 hover:text-discord-text-primary rounded-discord group">
+                <div class="relative mr-2">
+                     <img src="https://placehold.co/32x32/7289da/ffffff?text=U" alt="用户头像" class="rounded-full flex-shrink-0" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
+                     <span class="contact-status-indicator absolute bottom-0 right-0 block h-2.5 w-2.5 bg-gray-500 border border-discord-gray-2 rounded-full" title="离线"></span>
+                </div>
                 <span class="contact-name truncate flex-1">user-example</span>
-                <span class="material-symbols-outlined ml-auto text-xs opacity-0 group-hover:opacity-100 text-discord-red" title="移除聊天记录">delete</span>
+                <span class="material-symbols-outlined ml-auto text-xs opacity-0 group-hover:opacity-100 text-discord-red hidden" title="移除聊天记录">delete</span>
             </a>
             -->
         </div>
@@ -133,15 +137,11 @@
                      <span class="material-symbols-outlined mr-2 text-xl text-discord-text-muted">alternate_email</span> <!-- @ Icon -->
                     <h2 id="channel-name" class="font-semibold">选择联系人开始聊天</h2>
                 </div>
-                 <!-- Connection status remains text -->
+                 <!-- Connection status removed -->
                  <div class="flex items-center space-x-2 text-sm">
-                     <span class="text-discord-text-muted">ID:</span>
+                     <span class="text-discord-text-muted">您的 ID:</span>
                      <span id="local-user-id" class="text-white font-mono" title="您的用户 ID">加载中...</span>
-                     <input type="text" id="remote-user-id-input" placeholder="对方 ID" class="bg-discord-gray-1 text-xs rounded px-1.5 py-0.5 w-24 focus:outline-none focus:ring-1 focus:ring-discord-blurple">
-                     <button id="connect-button" data-action="connect" class="text-white text-xs px-2 py-0.5 rounded transition-colors duration-150 ease-in-out bg-discord-green hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed">
-                         连接
-                     </button>
-                     <span id="connection-status" class="text-xs ml-2">未连接</span>
+                     <!-- Removed remote ID input and connect button -->
                 </div>
             </div>
             <div class="flex items-center space-x-3 text-discord-text-muted">

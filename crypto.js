@@ -1,7 +1,7 @@
 // crypto.js
 import { ECDH_PARAMS, AES_PARAMS, KEY_USAGE_ECDH, KEY_USAGE_AES } from './constants.js';
 import * as state from './state.js';
-import { addSystemMessage, updateConnectionStatus } from './ui.js'; // Need ui functions for error/status messages
+import { addSystemMessage } from './ui.js'; // Need ui functions for error/status messages
 
 // Function to reset connection state will be called from connection.js or main.js
 // We don't import resetConnection directly here to avoid circular dependency

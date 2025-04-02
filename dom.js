@@ -21,8 +21,11 @@ export const chatInputArea = document.querySelector('.chat-input-area'); // Upda
 export const uploadButton = document.getElementById('upload-button');
 export const fileInput = document.getElementById('file-input');
 export const emptyMessageListDiv = document.getElementById('empty-message-list');
+// Add references for add contact elements
+export const addContactButton = document.getElementById('add-contact-button');
+export const addContactInput = document.getElementById('add-contact-input');
 // Add references for user info at bottom-left if needed for dynamic updates
-export const localUsernameSpan = document.querySelector('.local-username');
-export const localUserTagSpan = document.querySelector('.local-usertag');
-export const localUserAvatar = document.querySelector('.user-avatar-small');
-export const localUserStatusIndicator = document.querySelector('.user-status-indicator'); 
+export const localUsernameDiv = document.querySelector('.local-username'); // Changed selector name
+export const localUserTagDiv = document.querySelector('.local-usertag'); // Changed selector name
+export const userAvatarSmall = document.querySelector('.user-avatar-small'); // Changed selector name
+export const userStatusIndicator = document.querySelector('.user-status-indicator'); // Changed selector name 

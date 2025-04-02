@@ -5,101 +5,64 @@ import * as ui from './ui.js';
 import * as connection from './connection.js';
 import * as fileTransfer from './fileTransfer.js';
 import { TYPING_TIMER_LENGTH } from './constants.js';
-import * as storage from './storage.js'; // Import storage module
+import * as storage from './storage.js'; // Keep storage import if needed elsewhere
 
 // --- Event Handlers ---
 
-// Handle Connect/Disconnect Button Click
-function handleConnectButtonClick() {
-    const currentAction = dom.connectButton?.dataset.action;
-    if (currentAction === 'connect') {
-        const targetId = dom.remoteUserIdInput?.value.trim();
-        if (targetId) {
-            connection.initiateCall(targetId);
-        } else {
-            ui.addSystemMessage("请输入有效的目标用户 ID。", true);
-            console.error("Remote user ID input is empty or not found.");
-        }
-    } else if (currentAction === 'disconnect') {
-        connection.handleDisconnect();
-    }
-}
-
 // Handle Sending Text Messages
-async function handleSendMessage(event) {
-    console.log(`[Debug] handleSendMessage triggered. Event type: ${event.type}, Key: ${event.key}`); // 添加日志
+function handleSendMessage(event) {
+    // Check if Enter key was pressed
     if (event.type === 'keypress' && event.key !== 'Enter') return;
-    console.log('[Debug] handleSendMessage: Enter key pressed or event type is not keypress.'); // 添加日志
 
     if (!dom.messageInput) {
-        console.error('[Debug] handleSendMessage: messageInput DOM element not found!'); // 添加日志
+        console.error('messageInput DOM element not found!');
         return;
     }
 
     const messageText = dom.messageInput.value.trim();
-    console.log(`[Debug] handleSendMessage: Message text trimmed: "${messageText}"`); // 添加日志
 
     // Stop typing indicator immediately if Enter is pressed
     if (event.type === 'keypress' && event.key === 'Enter') {
         stopLocalTypingIndicator(); // Stop indicator regardless of message content
         if (messageText === '') {
-            console.log('[Debug] handleSendMessage: Empty message on Enter, not sending.'); // 添加日志
             return; // Don't send empty messages on Enter
         }
     }
 
-    // Prevent sending if connection/encryption is not ready
-    if (!state.isConnected || !state.sharedKey || state.remoteUserId !== ui.getSelectedPeerId()) {
-         console.warn(`[Debug] handleSendMessage: Cannot send, state check failed. isConnected: ${state.isConnected}, sharedKey: ${!!state.sharedKey}, remoteUserId: ${state.remoteUserId}, selectedPeerId: ${ui.getSelectedPeerId()}`); // 添加日志
-         ui.addSystemMessage("无法发送消息：连接或加密未就绪，或未选择正确的联系人。", true);
+    // Check connection status specific to the selected peer
+    if (!state.isConnected || state.remoteUserId !== ui.getSelectedPeerId()) {
+         console.warn(`Cannot send message: Not connected to the selected peer (${ui.getSelectedPeerId()}). Connected to: ${state.remoteUserId}`);
+         ui.addSystemMessage("无法发送消息：未连接到当前选择的联系人。", true);
          return;
     }
 
-    const timestamp = Date.now();
-    const messageData = {
-        type: 'text', // Explicitly type as text
-        text: messageText,
-        timestamp: timestamp,
-        peerId: state.remoteUserId, // Message is intended for the connected peer
-        isLocal: true // This is a locally sent message
-    };
+    if (!state.sharedKey) {
+         console.warn(`Cannot send message: Shared key not established with ${ui.getSelectedPeerId()}.`);
+         ui.addSystemMessage("无法发送消息：端到端加密未就绪。", true);
+         return;
+    }
 
+    // Proceed to send the message
     try {
-        console.log('[Debug] handleSendMessage: Preparing to send encrypted chat message...'); // 添加日志
-        await connection.sendEncryptedData('encryptedChat', { text: messageText, timestamp });
-        console.log('[Debug] handleSendMessage: sendEncryptedData call successful.'); // 添加日志
-
-        // Display the message locally immediately AFTER successful send attempt
-        ui.addP2PMessageToList(messageData);
-
-        // Save sent message to local storage AFTER UI update
-        try {
-             await storage.addMessage(messageData);
-             console.log('[Debug] handleSendMessage: Sent message saved to local storage.'); // 添加日志
-        } catch (storageError) {
-             console.error("[Debug] handleSendMessage: Failed to save sent message to local storage:", storageError);
-        }
-
-        // Clear input and refocus
+        connection.sendChatMessage(messageText); // Use the dedicated function from connection.js
         dom.messageInput.value = '';
         dom.messageInput.focus();
-
     } catch (error) {
-        console.error("[Debug] handleSendMessage: Failed to send message:", error);
-        ui.addSystemMessage(`发送消息失败: ${error.message}`, true);
+        console.error("Failed to send chat message:", error);
+        // Error message is handled within sendChatMessage now
     }
 }
 
 // Handle Local User Typing
 function handleLocalTyping() {
     // Send typing indicator only if connected to the selected peer
-    if (!state.isConnected || state.remoteUserId !== ui.selectedPeerId || !state.dataChannel || state.dataChannel.readyState !== 'open' || !state.sharedKey) {
+    if (!state.isConnected || state.remoteUserId !== ui.getSelectedPeerId() || !state.dataChannel || state.dataChannel.readyState !== 'open' || !state.sharedKey) {
         return;
     }
 
     if (!state.isTyping) {
         state.setIsTyping(true);
-        sendTypingState('typing');
+        connection.sendTypingIndicator(true); // Use connection.js function
     }
 
     // Clear the previous timer
@@ -119,106 +82,109 @@ function stopLocalTypingIndicator() {
         state.setTypingTimeout(null);
         state.setIsTyping(false);
         // Send stopped typing only if still connected to the selected peer
-        if (state.isConnected && state.remoteUserId === ui.selectedPeerId && state.dataChannel?.readyState === 'open' && state.sharedKey) {
-            sendTypingState('stopped_typing');
+        if (state.isConnected && state.remoteUserId === ui.getSelectedPeerId() && state.dataChannel?.readyState === 'open' && state.sharedKey) {
+            connection.sendTypingIndicator(false); // Use connection.js function
         }
     }
 }
 
-// Send typing state update (encrypted)
-async function sendTypingState(type) { // type = 'typing' or 'stopped_typing'
-     // Double check connection state before sending
-     if (!state.isConnected || state.remoteUserId !== ui.selectedPeerId || !state.dataChannel || state.dataChannel.readyState !== 'open' || !state.sharedKey) {
+// Handle adding a new contact
+function handleAddContact() {
+    console.log('[Debug] handleAddContact function entered.');
+    if (!dom.addContactInput || !dom.addContactButton) {
+        console.warn('[Debug] handleAddContact returning early: addContactInput or addContactButton not found.');
         return;
     }
-    try {
-        const typingPayload = { type: type }; // Simple payload
-        // Use the sendEncryptedData from connection module
-        await connection.sendEncryptedData('encryptedControl', typingPayload);
-        // console.log(`Sent ${type} control message.`); // Keep logging minimal
-    } catch (error) {
-        // Error logging handled by sendEncryptedData
-        // console.error(`Failed to send ${type} message:`, error);
+    const peerIdToAdd = dom.addContactInput.value.trim();
+    console.log(`[Debug] Attempting to add contact: "${peerIdToAdd}"`);
+
+    if (!peerIdToAdd) {
+        ui.addSystemMessage("请输入要添加的 Peer ID。", true);
+        return;
+    }
+
+    if (peerIdToAdd === state.localUserId) {
+         ui.addSystemMessage("不能添加自己为联系人。", true);
+         return;
+    }
+
+    const success = state.addContact(peerIdToAdd);
+    if (success) {
+        ui.addSystemMessage(`联系人 ${peerIdToAdd} 已添加。`);
+        ui.renderContactList(); // Re-render the list
+        dom.addContactInput.value = ''; // Clear input
+    } else {
+        // Error message handled within state.addContact (e.g., invalid ID)
+         ui.addSystemMessage(`无法添加联系人 ${peerIdToAdd}。`, true); // Generic fallback
     }
 }
 
-
 // --- Initialization ---
 
-// Make initializeApp async to await DB initialization
 async function initializeApp() {
+    console.log("[Debug] initializeApp function started.");
     console.log("Initializing P2P Chat Application...");
 
-    // 0. Initialize Database first
+    // 0. Initialize Database (optional, keep if chat history is needed)
     try {
         await storage.initDB();
         console.log("Database initialized successfully.");
     } catch (error) {
         console.error("Failed to initialize database:", error);
-        ui.addSystemMessage("错误：无法初始化本地存储。聊天记录将不会被保存。", true);
-        // Depending on requirements, might want to halt app or proceed without storage
+        ui.addSystemMessage("错误：无法初始化本地存储。聊天记录可能不会被保存。", true);
     }
 
-    // 1. Initial UI Setup
-    ui.updateConnectionStatus("未连接", 'neutral');
-    if (dom.localUserIdSpan) {
-        dom.localUserIdSpan.textContent = state.localUserId;
-    } else {
-        console.warn("local-user-id span not found in HTML");
-    }
-    // Populate member list initially
-    ui.populateMemberList();
-    // Hide member list on small screens initially
-    if (dom.memberListSidebar && window.innerWidth < 768) {
-        dom.memberListSidebar.classList.add('hidden');
-    }
-    // Check initial empty state for message list
-    ui.updateEmptyState();
-    // Initial system message
-    ui.addSystemMessage('从左侧选择联系人查看记录，或在上方输入 ID 进行连接。');
-
-    // Load and populate contacts list from storage
-    try {
-        const peerIds = await storage.getAllPeerIds();
-        ui.populateContactsList(peerIds);
-    } catch (error) {
-        console.error("Failed to load contacts list:", error);
-        ui.addSystemMessage("加载联系人列表失败。", true);
-    }
+    // 1. Load State & Initial UI Setup
+    state.loadContacts(); // Load contacts from localStorage
+    ui.displayLocalUserInfo(); // Display local user ID/name/avatar
+    ui.renderContactList(); // Render the initial contact list
+    ui.updateEmptyState(); // Show initial empty state
+    ui.populateMemberList(); // Initial population of member list (if used)
 
     // 2. Setup Event Listeners
-    if (dom.connectButton) {
-        dom.connectButton.addEventListener('click', handleConnectButtonClick);
+    console.log('[Debug] Value of dom.addContactButton before check:', dom.addContactButton);
+    // Add Contact Button
+    if (dom.addContactButton) {
+        console.log('[Debug] Found addContactButton, attaching click listener:', dom.addContactButton);
+        dom.addContactButton.addEventListener('click', handleAddContact);
     } else {
-        console.warn("Connect button not found in HTML");
+        console.warn("Add contact button not found");
+    }
+    console.log('[Debug] Value of dom.addContactInput before check:', dom.addContactInput);
+    // Add contact on Enter press in input field
+    if (dom.addContactInput) {
+         console.log('[Debug] Found addContactInput, attaching keypress listener:', dom.addContactInput);
+         dom.addContactInput.addEventListener('keypress', (event) => {
+             if (event.key === 'Enter') {
+                 handleAddContact();
+             }
+         });
     }
 
+    // Message Input
     if (dom.messageInput) {
         dom.messageInput.addEventListener('keypress', handleSendMessage);
-        dom.messageInput.addEventListener('input', handleLocalTyping); // Typing indicator
+        dom.messageInput.addEventListener('input', handleLocalTyping);
     } else {
-         console.warn("Message input not found in HTML");
+         console.warn("Message input not found");
     }
 
-    if (dom.memberListToggleButton) {
-        dom.memberListToggleButton.addEventListener('click', ui.toggleMemberList);
-    } else {
-        console.warn("Member list toggle button not found in HTML");
-    }
-
+    // File Upload
     if (dom.uploadButton && dom.fileInput) {
         dom.uploadButton.addEventListener('click', () => dom.fileInput.click());
         dom.fileInput.addEventListener('change', fileTransfer.handleFileSelect);
     } else {
-        console.warn("Upload button or file input not found in HTML");
+        console.warn("Upload button or file input not found");
     }
 
-    // Add listener for clicks within the contacts list container
-    if (dom.contactsListContainer) {
-        dom.contactsListContainer.addEventListener('click', ui.handleContactClick);
-    } else {
-        console.warn("Contacts list container not found in HTML");
-    }
+    // Member List Toggle (If sidebar is kept)
+    // if (dom.memberListToggleButton) {
+    //     dom.memberListToggleButton.addEventListener('click', ui.toggleMemberList);
+    // } else {
+    //     console.warn("Member list toggle button not found");
+    // }
+
+    // Note: Contact click listener is now added *within* ui.renderContactList
 
     // 3. Connect WebSocket to Signaling Server
     connection.connectWebSocket();

@@ -139,4 +139,21 @@ input:focus {
 /* Hide scrollbar buttons (optional) */
 ::-webkit-scrollbar-button {
     display: none;
-} 
+}
+
+/* Status indicator styles */
+.contact-status-indicator {
+    /* Base size & shape defined in HTML via Tailwind, add border */
+    border: 1.5px solid #2b2d31; /* discord-gray-2, matches contact list background */
+}
+
+.contact-status-indicator.online {
+    background-color: #23a55a; /* discord-green */
+    box-shadow: 0 0 3px rgba(35, 165, 90, 0.7); /* Optional glow */
+}
+
+.contact-status-indicator.offline {
+    background-color: #949ba4; /* discord-text-muted (gray) */
+}
+
+/* You could add more states like 'idle', 'dnd' if needed */ 

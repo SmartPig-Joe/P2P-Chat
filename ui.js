@@ -7,7 +7,6 @@ import * as storage from './storage.js'; // Import storage for potential future 
 
 let selectedPeerId = null; // Track the currently selected contact in the UI
 
-// --- Add this new exported function ---
 /**
  * Returns the currently selected peer ID.
  * @returns {string | null}
@@ -15,7 +14,6 @@ let selectedPeerId = null; // Track the currently selected contact in the UI
 export function getSelectedPeerId() {
     return selectedPeerId;
 }
-// -------------------------------------
 
 // --- UI Helper Functions ---
 
@@ -44,13 +42,14 @@ export function clearMessageList() {
 // --- Empty State ---
 export function updateEmptyState() {
     if (!dom.messageList || !dom.emptyMessageListDiv) return;
-    const hasMessages = dom.messageList.querySelector('.message-item') !== null;
+    // Check if message list has any message items (text or file)
+    const hasMessages = dom.messageList.querySelector('.message-item, .file-message-container') !== null;
     const hasSelectedContact = !!selectedPeerId;
 
     if (hasMessages) {
         dom.emptyMessageListDiv.classList.add('hidden');
     } else if (hasSelectedContact) {
-        // No messages, but a contact is selected - show "no messages yet" state
+        // No messages, but a contact is selected
         dom.emptyMessageListDiv.innerHTML = `
              <span class="material-symbols-outlined text-6xl mb-4">forum</span>
              <h3 class="text-lg font-semibold text-discord-text-primary">还没有消息</h3>
@@ -58,7 +57,7 @@ export function updateEmptyState() {
         `;
         dom.emptyMessageListDiv.classList.remove('hidden');
     } else {
-        // No contact selected - show initial "select contact" state
+        // No contact selected
         dom.emptyMessageListDiv.innerHTML = `
              <span class="material-symbols-outlined text-6xl mb-4">chat</span>
              <h3 class="text-lg font-semibold text-discord-text-primary">选择联系人</h3>
@@ -66,45 +65,6 @@ export function updateEmptyState() {
         `;
         dom.emptyMessageListDiv.classList.remove('hidden');
     }
-}
-
-// --- Connection Status ---
-export function updateConnectionStatus(statusText, statusType = 'neutral') {
-    if (dom.connectionStatusSpan) {
-        dom.connectionStatusSpan.textContent = statusText;
-        let colorClass = 'text-discord-text-muted';
-        if (statusType === 'success') colorClass = 'text-discord-green';
-        else if (statusType === 'error') colorClass = 'text-discord-red';
-        else if (statusType === 'progress') colorClass = 'text-yellow-400';
-        dom.connectionStatusSpan.className = `text-xs ml-2 font-semibold ${colorClass}`;
-    }
-
-    // Update connect button state
-    if (dom.connectButton) {
-        dom.connectButton.disabled = state.isConnecting;
-        if (state.isConnected) {
-            dom.connectButton.textContent = '断开连接';
-            dom.connectButton.dataset.action = 'disconnect';
-            dom.connectButton.classList.remove('bg-discord-green', 'hover:bg-green-600');
-            dom.connectButton.classList.add('bg-discord-red', 'hover:bg-red-600');
-            if (dom.remoteUserIdInput) dom.remoteUserIdInput.disabled = true;
-        } else {
-            dom.connectButton.textContent = '连接';
-            dom.connectButton.dataset.action = 'connect';
-            dom.connectButton.classList.remove('bg-discord-red', 'hover:bg-red-600');
-            dom.connectButton.classList.add('bg-discord-green', 'hover:bg-green-600');
-            // Enable input only if WS is connected
-            if (dom.remoteUserIdInput) dom.remoteUserIdInput.disabled = !(state.ws?.readyState === WebSocket.OPEN);
-            // Enable button only if WS is connected AND not currently connecting
-            dom.connectButton.disabled = !(state.ws?.readyState === WebSocket.OPEN) || state.isConnecting;
-        }
-    }
-
-    // Update chat input visibility based on connection AND selected contact
-    updateChatInputVisibility();
-
-    // Update member list (if still used)
-    populateMemberList();
 }
 
 // --- System Messages ---
@@ -119,7 +79,7 @@ export function addSystemMessage(text, isError = false) {
 
 // --- Chat Messages ---
 function renderMessageContent(text) {
-    const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+    const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#/%?=~_|!:,.;]*[-A-Z0-9+&@#/%=~_|])/ig;
     return escapeHTML(text).replace(urlRegex, function(url) {
         return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="text-discord-text-link hover:underline">${url}</a>`;
     });
@@ -129,25 +89,24 @@ function createP2PMessageHTML(msgData) {
     const sender = msgData.isLocal ? (mockUsers.find(u => u.id === state.localUserId) || { name: state.localUserId || '我', avatar: '5865f2' })
                                    : (mockUsers.find(u => u.id === msgData.peerId) || { name: msgData.peerId || '远程用户', avatar: '99aab5' });
     const avatarColor = sender?.avatar || '5865f2';
-    // Use sender's name for color class consistently
     const userColorClass = getUserColorClass(sender.name);
     const timeString = formatTime(new Date(msgData.timestamp));
-    // Show lock icon only if the message is part of the currently active E2EE session
+    // Show lock icon if connected to this specific peer and E2EE is active
     const lockIcon = state.sharedKey && state.isConnected && msgData.peerId === state.remoteUserId
-                     ? '<span class="material-symbols-outlined text-xs ml-1 text-discord-green align-middle" title="端到端加密">lock</span>' // Material lock icon
+                     ? '<span class="material-symbols-outlined text-xs ml-1 text-discord-green align-middle" title="端到端加密">lock</span>'
                      : '';
 
     return (
-       `<div class="flex items-start space-x-3 group message-item py-1 pr-4 hover:bg-discord-gray-4/30 rounded">
-            <img src="https://placehold.co/40x40/${avatarColor}/ffffff?text=${escapeHTML(sender.name.charAt(0).toUpperCase())}" alt="${escapeHTML(sender.name)} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer" title="${escapeHTML(sender.name)}" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">
-            <div class="flex-1">
-                <div class="flex items-baseline space-x-2">
-                    <span class="${userColorClass} font-medium hover:underline cursor-pointer">${escapeHTML(sender.name)}</span>
-                    <span class="text-xs text-discord-text-muted message-timestamp" title="${new Date(msgData.timestamp).toLocaleString('zh-CN')}">${timeString}</span>
-                    ${lockIcon}
-                </div>
-                <p class="text-discord-text-primary text-sm message-content">${renderMessageContent(msgData.text)}</p>
-            </div>
+       `<div class="flex items-start space-x-3 group message-item py-1 pr-4 hover:bg-discord-gray-4/30 rounded">\
+            <img src="https://placehold.co/40x40/${avatarColor}/ffffff?text=${escapeHTML(sender.name.charAt(0).toUpperCase())}" alt="${escapeHTML(sender.name)} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer" title="${escapeHTML(sender.name)}" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">\
+            <div class="flex-1">\
+                <div class="flex items-baseline space-x-2">\
+                    <span class="${userColorClass} font-medium hover:underline cursor-pointer">${escapeHTML(sender.name)}</span>\
+                    <span class="text-xs text-discord-text-muted message-timestamp" title="${new Date(msgData.timestamp).toLocaleString('zh-CN')}">${timeString}</span>\
+                    ${lockIcon}\
+                </div>\
+                <p class="text-discord-text-primary text-sm message-content">${renderMessageContent(msgData.text)}</p>\
+            </div>\
         </div>`
     );
 }
@@ -155,22 +114,22 @@ function createP2PMessageHTML(msgData) {
 export function addP2PMessageToList(msgData) {
     if (dom.messageList && msgData.peerId === selectedPeerId) { // Only add if the message belongs to the selected chat
         const messageElement = document.createElement('div');
+        // The HTML structure created by createP2PMessageHTML is the element itself
         messageElement.innerHTML = createP2PMessageHTML(msgData);
         if (messageElement.firstElementChild) {
-            dom.messageList.appendChild(messageElement.firstElementChild);
+             dom.messageList.appendChild(messageElement.firstElementChild);
         }
         scrollToBottom();
         updateEmptyState();
     }
-    // Ensure the peer is in the contacts list
-    addContactToList(msgData.peerId);
+    // Removed call to addContactToList - contacts are managed explicitly
 }
 
 // --- Typing Indicator ---
 export function showTypingIndicator() {
     // Only show if the typing peer is the currently selected AND connected peer
     if (!dom.typingIndicator || !dom.typingUsersSpan || !state.isConnected || state.remoteUserId !== selectedPeerId) return;
-    const remoteName = mockUsers.find(u => u.id === state.remoteUserId)?.name || state.remoteUserId || '对方';
+    const remoteName = state.contacts[state.remoteUserId]?.name || mockUsers.find(u => u.id === state.remoteUserId)?.name || state.remoteUserId || '对方';
     dom.typingUsersSpan.textContent = escapeHTML(remoteName);
     dom.typingIndicator.classList.remove('hidden');
     dom.typingIndicator.classList.add('flex');
@@ -186,443 +145,464 @@ export function hideTypingIndicator() {
 
 // --- File Messages ---
 function createFileMessageHTML(fileInfo, isLocal, downloadUrl = null, progress = 0) {
-    // Use peerId from fileInfo if available, otherwise assume current remoteUserId for sender display
-    const peerIdForDisplay = fileInfo.peerId || (isLocal ? state.localUserId : state.remoteUserId);
-    const sender = isLocal ? (mockUsers.find(u => u.id === state.localUserId) || { name: state.localUserId || '我', avatar: '5865f2' })
-                           : (mockUsers.find(u => u.id === peerIdForDisplay) || { name: peerIdForDisplay || '远程用户', avatar: '99aab5' });
+    // Determine peerId based on context
+    const peerIdForDisplay = fileInfo.peerId || (isLocal ? state.localUserId : (state.remoteUserId || '未知发送者'));
+     // Try to get name from contacts first, fallback to mockUsers or ID
+    const senderName = isLocal
+        ? (state.localUserId || '我')
+        : (state.contacts[peerIdForDisplay]?.name || mockUsers.find(u => u.id === peerIdForDisplay)?.name || peerIdForDisplay);
 
-    const avatarColor = sender?.avatar || '5865f2';
+    const sender = isLocal ? { name: senderName, avatar: '5865f2' } // Assuming local user always uses blurple avatar
+                           : { name: senderName, avatar: mockUsers.find(u => u.id === peerIdForDisplay)?.avatar || '99aab5' }; // Use mock avatar or default gray
+
+    const avatarColor = sender.avatar; // Use determined avatar color
     const userColorClass = getUserColorClass(sender.name);
     const timeString = formatTime(new Date(fileInfo.timestamp || Date.now()));
     const fileSizeMB = (fileInfo.size / 1024 / 1024).toFixed(2);
     const fileNameEscaped = escapeHTML(fileInfo.name);
     const transferId = fileInfo.transferId;
 
-    // Define icon classes using Material Symbols
-    const fileIconClasses = "material-symbols-outlined text-3xl text-discord-text-muted flex-shrink-0"; // Adjust size if needed
-    const downloadIconClasses = "material-symbols-outlined text-xl"; // Adjust size
-    const checkIconClasses = "material-symbols-outlined text-xl text-discord-green"; // Adjust size
+    // Material Symbols icon classes
+    const fileIconClasses = "material-symbols-outlined text-3xl text-discord-text-muted flex-shrink-0";
+    const downloadIconClasses = "material-symbols-outlined text-xl";
+    const checkIconClasses = "material-symbols-outlined text-xl text-discord-green";
+    const errorIconClasses = "material-symbols-outlined text-xl text-discord-red";
+    const progressIconClasses = "material-symbols-outlined text-xl text-discord-blurple animate-spin"; // Spinning icon for progress
 
     let fileContentHTML;
-    const isFailed = progress < 0; // Check for failure state
+    const isFailed = progress < 0;
+    const isComplete = progress >= 1;
+
+    // Message structure common parts
+    const messageHeader = `
+        <div class="flex items-baseline space-x-2">
+            <span class="${userColorClass} font-medium hover:underline cursor-pointer">${escapeHTML(sender.name)}</span>
+            <span class="text-xs text-discord-text-muted message-timestamp" title="${new Date(fileInfo.timestamp || Date.now()).toLocaleString('zh-CN')}">${timeString}</span>
+        </div>`;
+
+    let statusText = '';
+    let iconHTML = `<span class="${fileIconClasses}">description</span>`; // Default file icon
+    let actionHTML = '';
 
     if (isFailed) {
-        // Failed state
-        fileContentHTML = `
-            <div class="mt-1 bg-discord-gray-4 p-3 rounded-discord opacity-60">
-                <div class="flex items-center space-x-3">
-                    <span class="material-symbols-outlined ${fileIconClasses}">description</span> <!-- File icon -->
-                    <div class="flex-1 min-w-0">
-                        <span class="text-discord-text-primary font-medium block truncate" title="${fileNameEscaped}">${fileNameEscaped}</span>
-                        <div class="text-xs text-discord-red">${fileSizeMB} MB - 传输失败</div>
-                    </div>
-                    <span class="material-symbols-outlined text-xl text-discord-red flex-shrink-0">error</span> <!-- Error icon -->
-                </div>
-            </div>`;
-    } else if (downloadUrl) {
-        // Receiver's completed state with download link
-        fileContentHTML = `
-            <div class="mt-1 bg-discord-gray-4 p-3 rounded-discord flex items-center space-x-3">
-                <span class="material-symbols-outlined ${fileIconClasses}">description</span> <!-- File icon -->
-                <div class="flex-1 min-w-0">
-                    <a href="${downloadUrl}" download="${fileNameEscaped}" class="text-discord-text-link hover:underline font-medium block truncate" title="${fileNameEscaped}">${fileNameEscaped}</a>
-                    <div class="text-xs text-discord-text-muted">${fileSizeMB} MB</div>
-                </div>
-                <a href="${downloadUrl}" download="${fileNameEscaped}" class="text-discord-text-muted hover:text-white" title="下载">
-                    <span class="material-symbols-outlined ${downloadIconClasses}">download</span> <!-- Download icon -->
-                </a>
-            </div>`;
-    } else if (isLocal && progress >= 1) {
-        // Sender's completed state
-         fileContentHTML = `
-            <div class="mt-1 bg-discord-gray-4 p-3 rounded-discord">
-                <div class="flex items-center space-x-3">
-                    <span class="material-symbols-outlined ${fileIconClasses}">description</span> <!-- File icon -->
-                    <div class="flex-1 min-w-0">
-                        <span class="text-discord-text-primary font-medium block truncate" title="${fileNameEscaped}">${fileNameEscaped}</span>
-                        <div class="text-xs text-discord-text-muted">${fileSizeMB} MB - 已发送</div>
-                    </div>
-                     <span class="material-symbols-outlined ${checkIconClasses} flex-shrink-0">check_circle</span> <!-- Check icon -->
-                </div>
-            </div>`;
-    } else {
-        // Progress indicator state (sender or receiver)
+        statusText = `<div class="text-xs text-discord-red">${fileSizeMB} MB - 传输失败</div>`;
+        iconHTML = `<span class="${errorIconClasses} flex-shrink-0">error</span>`;
+    } else if (isComplete) {
+        if (downloadUrl) { // Receiver completed
+            statusText = `<div class="text-xs text-discord-text-muted">${fileSizeMB} MB</div>`;
+            actionHTML = `
+                <a href="${downloadUrl}" download="${fileNameEscaped}" class="text-discord-text-muted hover:text-white ml-auto" title="下载">
+                    <span class="${downloadIconClasses}">download</span>
+                </a>`;
+        } else if (isLocal) { // Sender completed
+            statusText = `<div class="text-xs text-discord-text-muted">${fileSizeMB} MB - 已发送</div>`;
+            iconHTML = `<span class="${checkIconClasses} flex-shrink-0">check_circle</span>`;
+        } else { // Receiver completed (but URL not ready? fallback)
+             statusText = `<div class="text-xs text-discord-text-muted">${fileSizeMB} MB - 已接收</div>`;
+             iconHTML = `<span class="${checkIconClasses} flex-shrink-0">check_circle</span>`;
+        }
+    } else { // In progress
         const progressPercent = Math.round(progress * 100);
-        const statusText = isLocal ? '发送中...' : '接收中...';
-        fileContentHTML = `
-            <div class="mt-1 bg-discord-gray-4 p-3 rounded-discord">
-                <div class="flex items-center space-x-3 mb-1">
-                     <span class="material-symbols-outlined ${fileIconClasses}">description</span> <!-- File icon -->
-                    <div class="flex-1 min-w-0">
-                        <span class="text-discord-text-primary font-medium block truncate" title="${fileNameEscaped}">${fileNameEscaped}</span>
-                        <div class="text-xs text-discord-text-muted">${fileSizeMB} MB - ${statusText}</div>
-                    </div>
-                </div>
-                <div class="w-full bg-discord-gray-1 rounded-full h-1.5 mt-1">
-                    <div class="bg-discord-blurple h-1.5 rounded-full" style="width: ${progressPercent}%" id="progress-${transferId}"></div>
-                </div>
+        statusText = `
+            <div class="text-xs text-discord-text-muted">${fileSizeMB} MB - ${isLocal ? '正在发送' : '正在接收'} ${progressPercent}%</div>
+            <div class="w-full bg-discord-gray-1 rounded-full h-1 mt-1 overflow-hidden">
+                <div class="bg-discord-blurple h-1 rounded-full" style="width: ${progressPercent}%"></div>
             </div>`;
+        // Optionally show a progress icon
+        // iconHTML = `<span class="${progressIconClasses} flex-shrink-0">autorenew</span>`;
     }
 
+    const fileDetailsHTML = `
+        <div class="flex-1 min-w-0">
+            <${downloadUrl ? `a href="${downloadUrl}" download="${fileNameEscaped}" class="text-discord-text-link hover:underline font-medium block truncate" title="${fileNameEscaped}"` : `span class="text-discord-text-primary font-medium block truncate" title="${fileNameEscaped}"`}>
+                ${fileNameEscaped}
+            </${downloadUrl ? 'a' : 'span'}>
+            ${statusText}
+        </div>`;
+
+    fileContentHTML = `
+        <div class="mt-1 bg-discord-gray-4 p-3 rounded-discord flex items-center space-x-3">
+            ${iconHTML}
+            ${fileDetailsHTML}
+            ${actionHTML}
+        </div>`;
+
     return (
-       `<div class="flex items-start space-x-3 group message-item py-1 pr-4 hover:bg-discord-gray-4/30 rounded" id="file-msg-${transferId}">
-            <img src="https://placehold.co/40x40/${avatarColor}/ffffff?text=${escapeHTML(sender.name.charAt(0).toUpperCase())}" alt="${escapeHTML(sender.name)} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer" title="${escapeHTML(sender.name)}" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">
-            <div class="flex-1">
-                <div class="flex items-baseline space-x-2">
-                    <span class="${userColorClass} font-medium hover:underline cursor-pointer">${escapeHTML(sender.name)}</span>
-                    <span class="text-xs text-discord-text-muted message-timestamp" title="${new Date(fileInfo.timestamp || Date.now()).toLocaleString('zh-CN')}">${timeString}</span>
-                </div>
-                ${fileContentHTML}
-            </div>
+        `<div class="flex items-start space-x-3 group message-item file-message-container py-1 pr-4 hover:bg-discord-gray-4/30 rounded" data-transfer-id="${transferId}">\
+            <img src="https://placehold.co/40x40/${avatarColor}/ffffff?text=${escapeHTML(sender.name.charAt(0).toUpperCase())}" alt="${escapeHTML(sender.name)} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer" title="${escapeHTML(sender.name)}" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">\
+            <div class="flex-1">\
+                ${messageHeader}\
+                ${fileContentHTML}\
+            </div>\
         </div>`
     );
 }
 
 export function addFileMessageToList(fileInfo, isLocal, downloadUrl = null, progress = 0) {
-    // Ensure peerId is associated with the fileInfo for correct display and contact list update
-    const peerId = isLocal ? state.remoteUserId : (fileInfo.senderId || state.remoteUserId); // Assuming senderId might be added to fileInfo upon reception
-    fileInfo.peerId = peerId; // Add peerId to fileInfo if not present
-
-    if (dom.messageList && peerId === selectedPeerId) { // Only add/update if the file belongs to the selected chat
-        const transferId = fileInfo.transferId;
-        const existingElement = document.getElementById(`file-msg-${transferId}`);
-
-        if (existingElement) {
-            // Update existing message
-            const newHTML = createFileMessageHTML(fileInfo, isLocal, downloadUrl, progress);
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = newHTML;
-            const newElement = tempDiv.firstElementChild;
-            if (newElement) {
-                existingElement.replaceWith(newElement);
-            }
-        } else {
-            // Add new message
-            const messageHTML = createFileMessageHTML(fileInfo, isLocal, downloadUrl, progress);
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = messageHTML;
-            const newElement = tempDiv.firstElementChild;
-            if (newElement) {
-                dom.messageList.appendChild(newElement);
-            }
-        }
-        scrollToBottom();
-        updateEmptyState();
-    }
-    // Ensure the peer is in the contacts list
-    if (peerId) { // Make sure we have a peerId before adding
-        addContactToList(peerId);
-    }
-}
-
-// --- Member List (Right Sidebar - Keep or Remove?) ---
-export function toggleMemberList() {
-    if (dom.memberListSidebar) {
-        dom.memberListSidebar.classList.toggle('hidden');
-        dom.memberListToggleButton?.classList.toggle('text-white');
-    }
-}
-
-export function populateMemberList() {
-    const onlineList = dom.memberListSidebar?.querySelector('#online-list-container');
-    const offlineList = dom.memberListSidebar?.querySelector('#offline-list-container');
-    if (!onlineList || !offlineList || !dom.onlineCountSpan || !dom.offlineCountSpan) {
-        // console.warn("Member list elements not found for population.");
-        return; // Silently return if sidebar isn't present
-    }
-    onlineList.innerHTML = '';
-    offlineList.innerHTML = '';
-    let onlineCount = 0;
-    let offlineCount = 0;
-
-    // Update local user info in bottom-left and mock list
-    const localUser = mockUsers.find(u => u.id === state.localUserId) || mockUsers[0];
-    localUser.id = state.localUserId; // Ensure ID is correct
-    localUser.name = state.localUserId; // Use ID as name for now
-    localUser.status = 'online'; // Local user is always online in their view
-    if (dom.localUsernameSpan) dom.localUsernameSpan.textContent = localUser.name;
-    if (dom.localUserTagSpan) dom.localUserTagSpan.textContent = `#${state.localUserId.slice(-4)}`; // Example tag
-    if (dom.localUserAvatar) {
-        dom.localUserAvatar.src = `https://placehold.co/32x32/${localUser.avatar}/ffffff?text=${escapeHTML(localUser.name.charAt(0).toUpperCase())}`;
-        dom.localUserAvatar.alt = `${escapeHTML(localUser.name)} 头像`;
-    }
-     if (dom.localUserStatusIndicator) dom.localUserStatusIndicator.className = `absolute bottom-0 right-0 block h-3 w-3 bg-discord-green border-2 border-discord-gray-1/80 rounded-full`;
-
-    // Update remote user status in the mock list
-    const remoteMockUserIndex = mockUsers.findIndex(u => u.id === state.remoteUserId);
-    if (remoteMockUserIndex !== -1) {
-        mockUsers[remoteMockUserIndex].status = state.isConnected ? 'online' : 'offline';
-    }
-
-    // Filter mock users to only include local and connected remote (or keep all for demo?)
-    // Let's keep all mock users for now, updating their status
-    mockUsers.forEach(user => {
-        // Determine status based on connection state if it's the remote user
-        const isUserOnline = user.id === state.localUserId || (user.id === state.remoteUserId && state.isConnected);
-        user.status = isUserOnline ? 'online' : 'offline'; // Update status in mock data
-
-        const statusIndicatorClass = isUserOnline ? 'bg-discord-green' : 'bg-gray-500';
-        const listToAdd = isUserOnline ? onlineList : offlineList;
-        const opacityClass = isUserOnline ? '' : 'opacity-50';
-        const nameColorClass = user.colorClass || getUserColorClass(user.name);
-        const userHTML = `
-            <div class="flex items-center space-x-2 group cursor-pointer p-1 rounded-discord hover:bg-discord-gray-4 ${opacityClass}">
-                <div class="relative">
-                    <img src="https://placehold.co/32x32/${user.avatar}/ffffff?text=${escapeHTML(user.name.charAt(0).toUpperCase())}" alt="${escapeHTML(user.name)} 头像" class="rounded-full" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
-                    <span class="absolute bottom-0 right-0 block h-3 w-3 ${statusIndicatorClass} border-2 border-discord-gray-2 rounded-full"></span>
-                </div>
-                <span class="text-sm ${nameColorClass} font-medium group-hover:text-white truncate" title="${escapeHTML(user.name)}">${escapeHTML(user.name)}</span>
-            </div>`;
-        listToAdd.innerHTML += userHTML;
-        if (isUserOnline) onlineCount++;
-        else offlineCount++;
-    });
-
-    dom.onlineCountSpan.textContent = onlineCount;
-    dom.offlineCountSpan.textContent = offlineCount;
-}
-
-// --- Contacts List (Left Sidebar) ---
-
-/**
- * Creates the HTML for a single contact item.
- * @param {string} peerId
- * @returns {string} HTML string for the contact item.
- */
-function createContactItemHTML(peerId) {
-    const user = mockUsers.find(u => u.id === peerId) || { name: peerId, avatar: '7289da' }; // Fallback avatar color
-    const avatarColor = user.avatar;
-    const displayName = escapeHTML(user.name);
-    // Add online/offline status indicator based on current connection state? (Optional)
-    const isConnectedPeer = state.isConnected && state.remoteUserId === peerId;
-    const statusIndicatorHTML = isConnectedPeer
-        ? `<span class="absolute bottom-0 left-5 block h-2.5 w-2.5 bg-discord-green border border-discord-gray-2 rounded-full"></span>`
-        : ''; // No indicator if not connected to this specific peer
-
-    return `
-        <a href="#" data-peer-id="${peerId}" class="contact-item group flex items-center px-2 py-1.5 text-discord-text-muted hover:bg-discord-gray-4 hover:text-discord-text-primary rounded-discord relative">
-            <div class="relative mr-2 flex-shrink-0">
-                <img src="https://placehold.co/32x32/${avatarColor}/ffffff?text=${escapeHTML(user.name.charAt(0).toUpperCase())}" alt="${displayName} 头像" class="rounded-full" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
-                ${statusIndicatorHTML}
-            </div>
-            <span class="contact-name truncate flex-1">${displayName}</span>
-            <!-- Optional: Add close/remove button -->
-            <!-- <button class="remove-contact-btn material-symbols-outlined ml-auto text-xs opacity-0 group-hover:opacity-100 text-discord-red hover:text-red-400" title="移除聊天记录">close</button> -->
-        </a>
-    `;
-}
-
-/**
- * Populates the contacts list in the left sidebar.
- * @param {string[]} peerIds - Array of peer IDs to display.
- */
-export function populateContactsList(peerIds) {
-    if (!dom.contactsListContainer) return;
-    dom.contactsListContainer.innerHTML = ''; // Clear existing list
-    if (!peerIds || peerIds.length === 0) {
-        dom.contactsListContainer.innerHTML = '<p class="text-xs text-discord-text-muted px-2 py-4 text-center">还没有聊天记录</p>';
+    if (!dom.messageList || !fileInfo || fileInfo.peerId !== selectedPeerId) {
+        // If message is not for the currently selected peer, don't add/update visually
+        console.log(`[UI] Ignoring file message for ${fileInfo?.peerId} as ${selectedPeerId} is selected.`);
         return;
     }
-    peerIds.forEach(peerId => {
-        // Avoid adding self to the contact list
-        if (peerId !== state.localUserId) {
-            dom.contactsListContainer.insertAdjacentHTML('beforeend', createContactItemHTML(peerId));
-        }
-    });
-    // Re-apply selected state if a contact was previously selected
-    if (selectedPeerId) {
-        const selectedItem = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${selectedPeerId}"]`);
-        selectedItem?.classList.add('active', 'bg-discord-gray-5', 'text-discord-text-primary');
-    }
-}
 
-/**
- * Adds a single contact to the list if not already present.
- * @param {string} peerId
- */
-export function addContactToList(peerId) {
-    if (!dom.contactsListContainer || !peerId || peerId === state.localUserId) return;
-    // Check if the contact already exists
-    if (!dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${peerId}"]`)) {
-        // Remove the "no history" message if it exists
-        const noHistoryMsg = dom.contactsListContainer.querySelector('p.text-center');
-        if (noHistoryMsg) noHistoryMsg.remove();
-        // Add the new contact item
-        dom.contactsListContainer.insertAdjacentHTML('beforeend', createContactItemHTML(peerId));
-    }
-     // Update status indicator if this peer is the currently connected one
-     updateContactStatusIndicator(peerId);
-}
+    const transferId = fileInfo.transferId;
+    const existingMsgElement = dom.messageList.querySelector(`.file-message-container[data-transfer-id="${transferId}"]`);
 
-/**
- * Updates the visual status indicator for a contact item.
- * @param {string} peerId
- */
-function updateContactStatusIndicator(peerId) {
-    if (!dom.contactsListContainer || !peerId) return;
-    const contactItem = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
-    if (!contactItem) return;
-
-    const isConnectedPeer = state.isConnected && state.remoteUserId === peerId;
-    let indicator = contactItem.querySelector('.absolute.bottom-0'); // Find existing indicator
-
-    if (isConnectedPeer && !indicator) {
-        // Add indicator if connected and not present
-        const imgDiv = contactItem.querySelector('.relative.mr-2');
-        if (imgDiv) {
-            imgDiv.insertAdjacentHTML('beforeend', `<span class="absolute bottom-0 left-5 block h-2.5 w-2.5 bg-discord-green border border-discord-gray-2 rounded-full"></span>`);
-        }
-    } else if (!isConnectedPeer && indicator) {
-        // Remove indicator if not connected and present
-        indicator.remove();
-    }
-}
-
-/**
- * Sets the currently selected contact, updates UI styles, and loads history.
- * @param {string | null} peerId - The peer ID to select, or null to deselect.
- */
-export async function setSelectedContact(peerId) {
-    const previouslySelectedId = selectedPeerId;
-    selectedPeerId = peerId; // Update the global selectedPeerId
-
-    // Remove active class from previously selected item
-    if (previouslySelectedId && dom.contactsListContainer) {
-        const prevItem = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${previouslySelectedId}"]`);
-        prevItem?.classList.remove('active', 'bg-discord-gray-5', 'text-discord-text-primary');
-    }
-
-    // Clear message list and update header/input area
-    clearMessageList();
-    if (peerId) {
-        const contactItem = dom.contactsListContainer?.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
-        if (contactItem) {
-            contactItem.classList.add('active', 'bg-discord-gray-5', 'text-discord-text-primary');
-        }
-        updateChatUIForContact(peerId); // Update header, input visibility etc.
-        try {
-            // Load history for the selected contact
-            await connection.loadAndDisplayHistory(peerId);
-        } catch (error) {
-            console.error(`Error loading history for ${peerId}:`, error);
-            addSystemMessage(`加载 ${peerId} 的聊天记录失败。`, true);
+    if (existingMsgElement) {
+        // Update existing message
+        const newHTML = createFileMessageHTML(fileInfo, isLocal, downloadUrl, progress);
+        // Create a temporary div to parse the new HTML
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = newHTML;
+        const newElement = tempDiv.firstElementChild;
+        if (newElement) {
+            existingMsgElement.replaceWith(newElement);
         }
     } else {
-        // No contact selected
-        updateChatUIForContact(null);
+        // Add new message
+        const messageHTML = createFileMessageHTML(fileInfo, isLocal, downloadUrl, progress);
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = messageHTML;
+         if (tempDiv.firstElementChild) {
+             dom.messageList.appendChild(tempDiv.firstElementChild);
+             scrollToBottom(); // Scroll only when adding a new message element
+             updateEmptyState();
+         }
     }
-    updateEmptyState(); // Update empty state based on selection and messages
+    // Removed call to addContactToList
+}
+
+// --- Member List (Right Sidebar - Review if needed later) ---
+export function populateMemberList() {
+     if (!dom.onlineListContainer || !dom.offlineListContainer || !dom.onlineCountSpan || !dom.offlineCountSpan) return;
+
+     // Clear existing lists
+     dom.onlineListContainer.innerHTML = '';
+     dom.offlineListContainer.innerHTML = '';
+
+     let onlineCount = 0;
+     let offlineCount = 0;
+
+     const createMemberHTML = (userId, isOnline) => {
+         const user = mockUsers.find(u => u.id === userId) || { name: userId, avatar: '99aab5' }; // Fallback
+         const avatarColor = user.avatar;
+         const statusClass = isOnline ? 'bg-discord-green' : 'bg-gray-500';
+         const statusTitle = isOnline ? '在线' : '离线';
+         const userColorClass = getUserColorClass(user.name);
+
+         return `
+             <div class="flex items-center space-x-2 group">
+                 <div class="relative flex-shrink-0">
+                     <img src="https://placehold.co/32x32/${avatarColor}/ffffff?text=${escapeHTML(user.name.charAt(0).toUpperCase())}" alt="${escapeHTML(user.name)} 头像" class="rounded-full" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
+                     <span class="absolute bottom-0 right-0 block h-2.5 w-2.5 ${statusClass} border-2 border-discord-gray-2 rounded-full" title="${statusTitle}"></span>
+                 </div>
+                 <span class="${userColorClass} text-sm truncate group-hover:underline cursor-pointer">${escapeHTML(user.name)}</span>
+             </div>`;
+     };
+
+     // Always add local user (assume online for now, could be refined)
+     dom.onlineListContainer.innerHTML += createMemberHTML(state.localUserId, true);
+     onlineCount++;
+
+     // Add remote user if connected
+     if (state.isConnected && state.remoteUserId) {
+         dom.onlineListContainer.innerHTML += createMemberHTML(state.remoteUserId, true);
+         onlineCount++;
+     } else if (selectedPeerId && selectedPeerId !== state.remoteUserId) {
+         // Show selected peer as offline if not connected
+         dom.offlineListContainer.innerHTML += createMemberHTML(selectedPeerId, false);
+         offlineCount++;
+     }
+      // TODO: Maybe populate offline list from state.contacts? For now, keeps it simple.
+
+     dom.onlineCountSpan.textContent = onlineCount;
+     dom.offlineCountSpan.textContent = offlineCount;
+ }
+
+// --- Contact List (Left Sidebar - NEW/REFACTORED) ---
+
+/**
+ * Renders the contact list in the left sidebar based on state.contacts.
+ */
+export function renderContactList() {
+    if (!dom.contactsListContainer) return;
+
+    dom.contactsListContainer.innerHTML = ''; // Clear existing list
+
+    const sortedContacts = Object.values(state.contacts).sort((a, b) => {
+        // Optional: Sort contacts (e.g., alphabetically or by status)
+        return a.name.localeCompare(b.name);
+    });
+
+    if (sortedContacts.length === 0) {
+        dom.contactsListContainer.innerHTML = '<p class="text-xs text-discord-text-muted px-2">还没有联系人。使用上面的输入框添加一个吧！</p>';
+        return;
+    }
+
+    sortedContacts.forEach(contact => {
+        const contactElement = createContactItemElement(contact);
+        dom.contactsListContainer.appendChild(contactElement);
+    });
+
+    // Re-apply active state if a contact is selected
+    if (selectedPeerId && state.contacts[selectedPeerId]) {
+        const activeElement = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${selectedPeerId}"]`);
+        if (activeElement) {
+            activeElement.classList.add('active');
+        }
+    }
+     // Update member list after rendering contacts (optional, depends on desired behavior)
+     populateMemberList();
 }
 
 /**
- * Updates the main chat area header and input visibility based on the selected contact.
- * @param {string | null} peerId
+ * Creates a single contact item HTML element.
+ * @param {object} contact - The contact object { id, name, online }
+ * @returns {HTMLElement} - The anchor element for the contact.
  */
-function updateChatUIForContact(peerId) {
-    if (dom.channelNameHeader) {
-        if (peerId) {
-            const user = mockUsers.find(u => u.id === peerId) || { name: peerId };
-            dom.channelNameHeader.textContent = escapeHTML(user.name);
-            dom.channelNameHeader.previousElementSibling.textContent = 'alternate_email'; // Show @ icon
-        } else {
-            dom.channelNameHeader.textContent = '选择联系人开始聊天';
-            dom.channelNameHeader.previousElementSibling.textContent = 'chat'; // Show chat icon
-        }
+function createContactItemElement(contact) {
+    const peerId = contact.id;
+    const name = contact.name || peerId; // Fallback name to ID
+    const isOnline = contact.online;
+
+    // Use mock avatar if available, otherwise generate placeholder
+    const user = mockUsers.find(u => u.id === peerId);
+    const avatarColor = user?.avatar || '7289da'; // Default Discord blurple
+    const avatarText = escapeHTML(name.charAt(0).toUpperCase());
+
+    const element = document.createElement('a');
+    element.href = '#'; // Prevent page jump
+    element.classList.add('contact-item', 'flex', 'items-center', 'px-2', 'py-1.5', 'text-discord-text-muted', 'hover:bg-discord-gray-4', 'hover:text-discord-text-primary', 'rounded-discord', 'group', 'relative');
+    element.dataset.peerId = peerId;
+
+    const statusClass = isOnline ? 'online' : 'offline';
+    const statusTitle = isOnline ? '在线' : '离线';
+
+    element.innerHTML = `
+        <div class="relative mr-2 flex-shrink-0">
+             <img src="https://placehold.co/32x32/${avatarColor}/ffffff?text=${avatarText}" alt="${escapeHTML(name)} 头像" class="rounded-full" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
+             <span class="contact-status-indicator ${statusClass} absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full" title="${statusTitle}"></span>
+        </div>
+        <span class="contact-name truncate flex-1">${escapeHTML(name)}</span>
+        <!-- <button class="delete-contact-btn material-symbols-outlined ml-auto text-xs opacity-0 group-hover:opacity-100 text-discord-red hover:text-red-400 p-0.5" title="移除联系人">delete</button> -->
+    `;
+
+    // Attach click listener
+    element.addEventListener('click', handleContactClick);
+
+    // Code for delete button (commented out for now)
+    /*
+    const deleteBtn = element.querySelector('.delete-contact-btn');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', (event) => {
+            event.stopPropagation(); // Prevent contact click
+            if (confirm(`确定要移除联系人 ${name} (${peerId}) 吗？`)) {
+                // TODO: Implement state.removeContact(peerId)
+                console.log(`Request remove contact: ${peerId}`);
+            }
+        });
     }
-    updateChatInputVisibility();
-    // Hide typing indicator if the selected contact changes
-    hideTypingIndicator();
+    */
+
+    return element;
 }
 
 /**
- * Updates the visibility of the chat input area based on connection and selection.
+ * Updates the visual status indicator for a specific contact.
+ * @param {string} peerId - The ID of the contact to update.
+ * @param {boolean} isOnline - The new online status.
  */
-export function updateChatInputVisibility() {
-    // --- 添加调试日志 ---
-    console.log(
-        '[Debug] updateChatInputVisibility Check:',
-        'isConnected:', state.isConnected,
-        'remoteUserId:', state.remoteUserId,
-        'selectedPeerId:', selectedPeerId,
-        'sharedKey:', state.sharedKey ? 'Exists' : null // 只检查是否存在，不打印密钥本身
-    );
-    // --------------------
-
-    // 输入框需要同时满足：已连接、连接的远程用户ID === 当前选中的用户ID、共享密钥已建立
-    const shouldShowInput = state.isConnected && state.remoteUserId === selectedPeerId && state.sharedKey;
-    if (dom.chatInputArea) {
-        if (shouldShowInput) {
-            console.log('[Debug] updateChatInputVisibility: Enabling input area...'); // 添加日志
-            dom.chatInputArea.classList.remove('hidden');
-            console.log(`[Debug] chatInputArea classes after remove hidden: ${dom.chatInputArea.className}`); // 添加日志
-            if (dom.messageInput) {
-                console.log('[Debug] updateChatInputVisibility: Setting input placeholder and enabling.'); // 添加日志
-                dom.messageInput.placeholder = `给 ${escapeHTML(selectedPeerId || '')} 发送消息`;
-                dom.messageInput.disabled = false;
-                 console.log(`[Debug] messageInput disabled state: ${dom.messageInput.disabled}`); // 添加日志
-            }
-            if (dom.uploadButton) {
-                 console.log('[Debug] updateChatInputVisibility: Enabling upload button.'); // 添加日志
-                 dom.uploadButton.disabled = false;
-                 console.log(`[Debug] uploadButton disabled state: ${dom.uploadButton.disabled}`); // 添加日志
-            }
-        } else {
-            console.log('[Debug] updateChatInputVisibility: Hiding input area and disabling input.'); // 添加日志
-            dom.chatInputArea.classList.add('hidden');
-            if (dom.messageInput) {
-                dom.messageInput.placeholder = `发送消息`; // Reset placeholder
-                dom.messageInput.disabled = true;
-            }
-            if (dom.uploadButton) dom.uploadButton.disabled = true;
+export function updateContactStatusUI(peerId, isOnline) {
+    if (!dom.contactsListContainer) return;
+    const contactElement = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
+    if (contactElement) {
+        const indicator = contactElement.querySelector('.contact-status-indicator');
+        if (indicator) {
+            indicator.classList.remove('online', 'offline');
+            indicator.classList.add(isOnline ? 'online' : 'offline');
+            indicator.title = isOnline ? '在线' : '离线';
         }
     }
+     // Update the member list as well, if it's being used
+     populateMemberList();
 }
 
 /**
  * Handles clicks on contact items in the list.
- * @param {Event} event
+ * @param {Event} event - The click event.
  */
-export function handleContactClick(event) {
-    const targetItem = event.target.closest('.contact-item');
-    if (!targetItem) return; // Click wasn't on a contact item
+export async function handleContactClick(event) {
+    event.preventDefault(); // Prevent anchor jump
+    const targetElement = event.currentTarget; // The <a> tag
+    const peerId = targetElement.dataset.peerId;
 
-    event.preventDefault(); // Prevent default link behavior
-
-    const peerId = targetItem.dataset.peerId;
-    if (peerId && peerId !== selectedPeerId) { // Only act if a different contact is clicked
-        setSelectedContact(peerId);
+    if (!peerId || peerId === selectedPeerId) {
+        console.log(`Contact ${peerId} already selected or invalid.`);
+        return; // Do nothing if already selected or invalid
     }
-    // Handle remove button click (optional)
-    // if (event.target.classList.contains('remove-contact-btn')) {
-    //     const peerIdToRemove = targetItem.dataset.peerId;
-    //     console.log("Remove contact:", peerIdToRemove);
-    //     // Implement logic to remove chat history and the item from the list
-    // }
+
+    console.log(`[UI] Contact selected: ${peerId}`);
+    const previousSelectedId = selectedPeerId;
+    selectedPeerId = peerId; // Update selected peer ID
+
+    // --- Update Contact List UI ---
+    if (dom.contactsListContainer) {
+      // Remove 'active' class from previously selected item
+      const previousElement = dom.contactsListContainer.querySelector(`.contact-item.active`);
+      if (previousElement) {
+          previousElement.classList.remove('active');
+      }
+      // Add 'active' class to the newly selected item
+      targetElement.classList.add('active');
+    }
+
+    // --- Update Main Chat Area ---
+    if (dom.channelNameH2) {
+         const contactName = state.contacts[peerId]?.name || peerId;
+         dom.channelNameH2.textContent = escapeHTML(contactName);
+         dom.channelNameH2.title = `与 ${escapeHTML(contactName)} (${peerId}) 的聊天`; // Add tooltip with ID
+    }
+
+    // Clear existing messages and show loading/empty state
+    clearMessageList(); // This also calls updateEmptyState
+
+    // Disable input initially while loading history/connecting
+    updateChatInputVisibility(false); // Force hide input initially
+
+     // Show "loading history" or initial empty state
+     dom.emptyMessageListDiv.innerHTML = `
+         <div class="animate-pulse text-center">
+             <span class="material-symbols-outlined text-6xl mb-4 text-discord-text-muted">hourglass_top</span>
+             <h3 class="text-lg font-semibold text-discord-text-primary">正在加载聊天记录...</h3>
+             <p class="text-sm text-discord-text-muted">请稍候</p>
+         </div>
+     `;
+     dom.emptyMessageListDiv.classList.remove('hidden');
+
+
+    // --- Load History ---
+    try {
+        // Disconnect from previous peer ONLY IF we were connected to them
+        if (state.isConnected && state.remoteUserId && state.remoteUserId !== peerId) {
+             console.log(`[UI] Disconnecting from previous peer ${state.remoteUserId} before connecting to ${peerId}`);
+             connection.disconnectFromPeer(); // Disconnect gracefully
+             // Wait a moment for disconnection events to potentially process
+             await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        await connection.loadAndDisplayHistory(peerId); // Load history (awaiting ensures it finishes before next steps)
+        updateEmptyState(); // Update empty state based on loaded history
+    } catch (error) {
+        console.error(`Error loading history for ${peerId}:`, error);
+        addSystemMessage(`加载 ${peerId} 的聊天记录失败。`, true);
+        updateEmptyState(); // Ensure empty state is correct after error
+    }
+
+    // --- Initiate Connection ---
+    // Only attempt connection if not already connected to this peer
+    if (!state.isConnected || state.remoteUserId !== peerId) {
+         console.log(`[UI] Attempting connection to selected peer: ${peerId}`);
+         try {
+             // No await here, connection is asynchronous
+             connection.connectToPeer(peerId);
+             // Connection status/input visibility will be updated by connection events
+         } catch (error) {
+             console.error(`[UI] Error initiating connection to ${peerId}:`, error);
+             addSystemMessage(`尝试连接到 ${peerId} 时出错。`, true);
+             updateChatInputVisibility(); // Update input based on failed attempt
+         }
+    } else {
+         console.log(`[UI] Already connected to ${peerId}. Enabling input.`);
+         updateChatInputVisibility(); // Already connected, ensure input is visible
+    }
+
+     // Update right sidebar member list
+     populateMemberList();
 }
 
-// --- Contact Status ---
-export function updateContactStatus(peerId) {
-    if (!peerId || !dom.contactsListContainer) return;
-    
-    const contactElement = dom.contactsListContainer.querySelector(`[data-peer-id="${peerId}"]`);
-    if (!contactElement) return;
+// --- Chat Input Area ---
 
-    // 根据连接状态更新联系人状态
-    if (state.isConnected && state.remoteUserId === peerId) {
-        // 当前连接的联系人
-        contactElement.classList.add('bg-discord-gray-4');
-        contactElement.classList.remove('text-discord-text-muted');
-        contactElement.classList.add('text-discord-text-primary');
-    } else if (state.isConnecting && state.remoteUserId === peerId) {
-        // 正在连接的联系人
-        contactElement.classList.add('bg-discord-gray-4/50');
-        contactElement.classList.remove('text-discord-text-muted');
-        contactElement.classList.add('text-yellow-400');
+/**
+ * Shows or hides the chat input area based on connection status and selected peer.
+ * Optionally force visibility state.
+ * @param {boolean} [forceVisible=null] - true to force show, false to force hide, null to auto-determine.
+ */
+export function updateChatInputVisibility(forceVisible = null) {
+    if (!dom.chatInputArea) return;
+
+    let shouldBeVisible;
+    if (forceVisible !== null) {
+        shouldBeVisible = forceVisible;
     } else {
-        // 未连接的联系人
-        contactElement.classList.remove('bg-discord-gray-4', 'bg-discord-gray-4/50');
-        contactElement.classList.remove('text-yellow-400');
-        contactElement.classList.add('text-discord-text-muted');
-        contactElement.classList.remove('text-discord-text-primary');
+        // Auto-determine: Show only if connected to the *selected* peer
+        shouldBeVisible = state.isConnected && state.remoteUserId === selectedPeerId;
     }
+
+    if (shouldBeVisible) {
+        dom.chatInputArea.classList.remove('hidden');
+        // Optionally focus input when it becomes visible
+        // if (dom.messageInput && !dom.messageInput.matches(':focus')) {
+        //     dom.messageInput.focus();
+        // }
+    } else {
+        dom.chatInputArea.classList.add('hidden');
+    }
+    console.log(`[UI] Chat input for ${selectedPeerId} visibility set to: ${shouldBeVisible}`);
+}
+
+// --- Local User Info ---
+export function displayLocalUserInfo() {
+    if (dom.localUserIdSpan) {
+        dom.localUserIdSpan.textContent = state.localUserId;
+        dom.localUserIdSpan.title = `您的用户 ID: ${state.localUserId}`;
+        // Add click-to-copy functionality
+        dom.localUserIdSpan.style.cursor = 'pointer';
+        dom.localUserIdSpan.onclick = () => {
+            navigator.clipboard.writeText(state.localUserId).then(() => {
+                const originalText = dom.localUserIdSpan.textContent;
+                dom.localUserIdSpan.textContent = '已复制!';
+                setTimeout(() => { dom.localUserIdSpan.textContent = originalText; }, 1500);
+            }).catch(err => {
+                console.error('无法复制 ID: ', err);
+                addSystemMessage('无法复制 ID。请手动复制。', true);
+            });
+        };
+    }
+    if(dom.localUsernameDiv) {
+         const user = mockUsers.find(u => u.id === state.localUserId);
+         dom.localUsernameDiv.textContent = user?.name || state.localUserId.substring(0, 8); // Show mock name or truncated ID
+         dom.localUsernameDiv.title = state.localUserId; // Full ID on hover
+    }
+     if(dom.localUserTagDiv) {
+         const user = mockUsers.find(u => u.id === state.localUserId);
+         dom.localUserTagDiv.textContent = user?.tag || `#${state.localUserId.slice(-4)}`; // Mock tag or last 4 of ID
+    }
+     if (dom.userAvatarSmall && dom.localUsernameDiv) {
+         const user = mockUsers.find(u => u.id === state.localUserId) || { name: state.localUserId, avatar: '5865f2' };
+         dom.userAvatarSmall.src = `https://placehold.co/32x32/${user.avatar}/ffffff?text=${escapeHTML(user.name.charAt(0).toUpperCase())}`;
+         dom.userAvatarSmall.alt = `${escapeHTML(user.name)} 头像`;
+     }
+     // Update status indicator (assuming always online for self for now)
+     if (dom.userStatusIndicator) {
+         dom.userStatusIndicator.classList.remove('bg-gray-500');
+         dom.userStatusIndicator.classList.add('bg-discord-green');
+         dom.userStatusIndicator.title = '在线';
+     }
+}
+
+// --- Other UI Updates ---
+
+// Example: Update user profile section (can be expanded)
+export function updateUserProfile(userId, profileData) {
+    // Find user elements (e.g., in member list or message headers) and update them
+    console.log(`[UI] Received request to update profile for ${userId}`, profileData);
+    // This would involve finding elements associated with userId and updating names/avatars
+    // Potentially re-render contacts list or member list if names changed
+    // Example: Update contact list if name changed
+    if (state.contacts[userId] && profileData.name && state.contacts[userId].name !== profileData.name) {
+         state.contacts[userId].name = profileData.name;
+         state.saveContacts(); // Save the name change
+         renderContactList(); // Re-render to show new name
+    }
+     populateMemberList(); // Re-render member list as well
 } 
