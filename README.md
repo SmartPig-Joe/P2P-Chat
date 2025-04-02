@@ -21,10 +21,11 @@
 *   **连接状态**: 显示与信令服务器和对等方的连接状态。
 *   **用户 ID**: 自动生成唯一的临时用户 ID。
 *   **用户列表 (模拟)**: 显示本地用户和已连接的远程用户（状态为模拟）。
+*   **代码模块化**: 使用 ES6 模块将 JavaScript 代码拆分为多个文件（例如 `main.js`, `connection.js`, `crypto.js`, `ui.js` 等），提高了代码的可维护性。
 
 ## 技术栈
 
-*   **前端**: HTML5, CSS3, JavaScript (ES6+)
+*   **前端**: HTML5, CSS3, JavaScript (ES6+, Modules)
 *   **UI 框架**: [Tailwind CSS](https://tailwindcss.com/)
 *   **图标**: [Material Symbols (Outlined)](https://fonts.google.com/icons)
 *   **P2P 通信**: WebRTC (`RTCPeerConnection`, `RTCDataChannel`)
@@ -34,9 +35,9 @@
 ## 工作原理
 
 1.  **启动与注册**:
-    *   浏览器加载 `discord.html`。
-    *   JavaScript (`script.js`) 启动，生成一个临时的本地用户 ID (e.g., `user-xxxxxx`)。
-    *   客户端连接到预定义的 WebSocket 信令服务器 (`ws://172.245.126.148:8080/ws`) 并使用其用户 ID 进行注册。
+    *   浏览器加载 `index.html`。
+    *   JavaScript 模块 (`main.js` 作为入口) 启动，生成一个临时的本地用户 ID (e.g., `user-xxxxxx`)。
+    *   客户端连接到预定义的 WebSocket 信令服务器 (在 `constants.js` 中配置) 并使用其用户 ID 进行注册。
 2.  **发起连接**:
     *   用户 A 在输入框中输入用户 B 的 ID，然后点击"连接"按钮。
     *   客户端 A 创建一个 `RTCPeerConnection` 实例和一个 `RTCDataChannel`。
@@ -62,17 +63,17 @@
 
 1.  **信令服务器**:
     *   此项目需要一个兼容的 WebSocket 信令服务器来协调 P2P 连接的建立。
-    *   代码中硬编码的服务器地址是 `ws://172.245.126.148:8080/ws` (位于 `script.js` 中)。
-    *   **你需要运行自己的信令服务器实例，并将 `script.js` 中的 `signalingServerUrl` 变量更新为你的服务器地址。** 一个简单的 Node.js 信令服务器示例可以在网上找到，它需要处理 `register`, `offer`, `answer`, `candidate` 和 `user_disconnected` 类型的消息。
+    *   代码中使用的服务器地址在 `constants.js` 文件的 `SIGNALING_SERVER_URL` 常量中定义 (默认为 `wss://signal.smartpig.top/ws`)。
+    *   **你需要运行自己的信令服务器实例，并将 `constants.js` 中的 `SIGNALING_SERVER_URL` 更新为你的服务器地址。** 一个简单的 Node.js 信令服务器示例可以在网上找到，它需要处理 `register`, `offer`, `answer`, `candidate` 和 `user_disconnected` 类型的消息。
 2.  **客户端**:
     *   无需构建或安装。
-    *   只需在支持 WebRTC 和 Web Crypto API 的现代浏览器（如 Chrome, Firefox, Edge）中直接打开 `discord.html` 文件即可。
+    *   只需在支持 WebRTC 和 Web Crypto API 的现代浏览器（如 Chrome, Firefox, Edge）中直接打开 `index.html` 文件即可（需要通过 HTTP 服务器访问以支持 ES6 模块，例如使用 Live Server 扩展）。
     *   为了测试 P2P 功能，你需要在两个不同的浏览器标签页或窗口中打开此文件。
 
 ## 如何使用
 
-1.  在第一个浏览器窗口中打开 `discord.html`。注意顶部栏显示的本地用户 ID（例如 `user-123456`）。
-2.  在第二个浏览器窗口中打开 `discord.html`。注意其本地用户 ID（例如 `user-654321`）。
+1.  通过 HTTP 服务器（如 VS Code Live Server）在第一个浏览器窗口中打开 `index.html`。注意顶部栏显示的本地用户 ID（例如 `user-123456`）。
+2.  同样，在第二个浏览器窗口中打开 `index.html`。注意其本地用户 ID（例如 `user-654321`）。
 3.  回到第一个窗口，在"对方 ID"输入框中输入第二个窗口的用户 ID (`user-654321`)。
 4.  点击"连接"按钮。
 5.  两个窗口的连接状态应依次更新为"信令服务器已连接" -> "呼叫/收到 Offer..." -> "ICE 状态: checking/connected" -> "数据通道开启 (等待加密...)" -> "已连接到 [对方ID] (E2EE)"。
@@ -87,6 +88,7 @@
 *   **错误处理**: 可以进一步增强错误处理和用户反馈。
 *   **无用户认证**: 任何知道用户 ID 的人都可以尝试连接。
 *   **扩展性**: 目前仅支持 1 对 1 聊天。
+*   **本地运行**: 由于使用了 ES6 模块，需要通过 HTTP 服务器（如 Live Server）运行 `index.html`，直接打开本地文件可能无法工作。
 
 ---
 
