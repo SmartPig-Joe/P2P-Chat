@@ -200,6 +200,74 @@ export function getAllPeerIds() {
     });
 }
 
+/**
+ * Deletes all messages associated with a specific peer ID from the IndexedDB.
+ * @param {string} peerId - The ID of the peer whose messages should be deleted.
+ * @returns {Promise<void>} A promise that resolves when deletion is complete or rejects on error.
+ */
+export function deleteMessagesForPeer(peerId) {
+    return new Promise((resolve, reject) => {
+        if (!db) {
+            console.error("Database not initialized. Call initDB() first.");
+            return reject("Database not initialized.");
+        }
+        if (!peerId) {
+            console.error("peerId is required for deleteMessagesForPeer");
+            return reject("peerId is required.");
+        }
+
+        console.log(`Attempting to delete messages for peer: ${peerId}`);
+
+        // Start a read-write transaction
+        const transaction = db.transaction([STORE_MESSAGES], 'readwrite');
+        const store = transaction.objectStore(STORE_MESSAGES);
+        // Get the index to query by peerId
+        const index = store.index('peerId');
+
+        // Open a cursor over the index for the specified peerId
+        const request = index.openCursor(IDBKeyRange.only(peerId));
+        let deleteCount = 0;
+
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+                // Delete the record found by the cursor
+                const deleteRequest = cursor.delete();
+                deleteRequest.onsuccess = () => {
+                    deleteCount++;
+                };
+                deleteRequest.onerror = (e) => {
+                     console.error(`Error deleting message with key ${cursor.primaryKey} for peer ${peerId}:`, e.target.error);
+                     // Continue trying to delete other messages
+                };
+                cursor.continue(); // Move to the next record matching the peerId
+            } else {
+                // No more entries matching the peerId
+                console.log(`Finished deleting messages for peer ${peerId}. Total deleted: ${deleteCount}`);
+                resolve(); // Deletion process completed (successfully or with individual errors logged)
+            }
+        };
+
+        request.onerror = (event) => {
+            console.error(`Error opening cursor to delete messages for peer ${peerId}:`, event.target.error);
+            reject(`Error opening cursor: ${event.target.error}`);
+        };
+
+        transaction.onerror = (event) => {
+            console.error(`Transaction error deleting messages for peer ${peerId}:`, event.target.error);
+            // Note: The transaction might have already failed before resolving/rejecting the main promise
+            // If the transaction fails, individual delete errors might not be the root cause.
+            reject(`Transaction error: ${event.target.error}`);
+        };
+        transaction.oncomplete = () => {
+             // This might fire before the main promise resolves if cursor iteration finishes first
+             console.log(`Delete messages transaction completed for peer ${peerId}.`);
+             // Resolve here might be too early if cursor.delete() is async in a way that outlives the transaction?
+             // It's generally safer to resolve when the cursor iteration completes (in the else block of cursor.onsuccess)
+        };
+    });
+}
+
 export async function saveKeyPair(keyPair) {
   try {
     // 检查 keyPair 是否有效

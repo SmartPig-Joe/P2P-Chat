@@ -157,4 +157,18 @@ input:focus {
     background-color: #949ba4; /* discord-text-muted (gray) */
 }
 
-/* You could add more states like 'idle', 'dnd' if needed */ 
+/* You could add more states like 'idle', 'dnd' if needed */
+
+/* 联系人右键菜单 */
+#contact-context-menu {
+    min-width: 120px; /* 设置一个最小宽度 */
+}
+
+#contact-context-menu a {
+    display: block; /* 确保链接占满整行 */
+    text-decoration: none; /* 移除下划线 */
+    transition: background-color 0.1s ease-in-out; /* 添加悬停过渡效果 */
+}
+
+/* Optional: Add specific icon styling if needed later */
+/* #contact-context-menu .material-symbols-outlined { ... } */ 

@@ -168,6 +168,12 @@
     <!-- Optional: Member List Sidebar (if needed) -->
     <!-- <div id="member-list-sidebar" class="w-60 bg-discord-gray-2 border-l border-discord-gray-5 flex-col flex-shrink-0 hidden md:flex"> ... </div> -->
 
+    <!-- 联系人右键菜单 (初始隐藏) -->
+    <div id="contact-context-menu" class="hidden absolute z-50 bg-discord-gray-1 border border-discord-gray-5 rounded shadow-lg py-1 text-sm">
+        <!-- 菜单项将由 JS 动态添加 -->
+        <!-- 示例: <a href="#" class="block px-4 py-1.5 text-discord-red hover:bg-discord-gray-3">删除联系人</a> -->
+    </div>
+
     <!-- Main application script (module) -->
     <script type="module" src="main.js"></script>
 

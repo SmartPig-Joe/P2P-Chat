@@ -175,4 +175,22 @@ export function base64ToUint8Array(base64) {
   return new Uint8Array(buffer);
 }
 
+/**
+ * Formats bytes into a human-readable string (KB, MB, GB, etc.).
+ * @param {number} bytes The number of bytes.
+ * @param {number} [decimals=2] The number of decimal places to display.
+ * @returns {string} The formatted string.
+ */
+export function formatBytes(bytes, decimals = 2) {
+    if (!+bytes) return '0 Bytes';
+
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+}
+
 // (Other functions if needed) 

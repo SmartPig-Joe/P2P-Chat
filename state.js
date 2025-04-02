@@ -291,6 +291,41 @@ export function updateContactStatus(peerId, status) { // status: boolean | 'conn
     }
 }
 
+// 新增：删除联系人函数
+export function removeContact(peerId) {
+    if (!peerId || typeof peerId !== 'string' || peerId.trim() === '') {
+        console.warn("Attempted to remove invalid peer ID:", peerId);
+        return false;
+    }
+    const trimmedId = peerId.trim();
+    if (!contacts[trimmedId]) {
+        console.log(`Contact ${trimmedId} does not exist.`);
+        return false; // Contact doesn't exist
+    }
+
+    console.log(`Attempting to remove contact: ${trimmedId}`);
+
+    // 1. 从 contacts 对象中删除
+    const updatedContacts = { ...contacts };
+    delete updatedContacts[trimmedId];
+    setContacts(updatedContacts);
+
+    // 2. 保存更新后的联系人列表
+    saveContacts(); // 保存变更
+
+    // 3. 重置与该 peer 相关的所有连接状态 (重要!)
+    resetPeerState(trimmedId); // 调用 resetPeerState 清理连接
+
+    // 4. (可选) 如果当前活动聊天是此联系人，则清除活动聊天
+    if (activeChatPeerId === trimmedId) {
+        setActiveChat(null);
+        // UI 更新应由调用者处理 (例如 ui.js 中的 renderContactList 和 updateChatHeader)
+    }
+
+    console.log(`Contact ${trimmedId} removed successfully.`);
+    return true;
+}
+
 // --- Reset Functions ---
 
 // Reset state for a *specific* peer

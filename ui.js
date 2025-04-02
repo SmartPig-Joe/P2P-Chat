@@ -1,16 +1,18 @@
 // ui.js
 import * as dom from './dom.js';
 import * as state from './state.js';
-import { escapeHTML, formatTime, getUserColorClass } from './utils.js';
+import { escapeHTML, formatTime, getUserColorClass, formatBytes } from './utils.js';
 import * as connection from './connection.js'; // Import connection to call loadAndDisplayHistory
 import * as storage from './storage.js'; // Import storage for potential future use (e.g., removing contacts)
-import * as fileTransfer from './fileTransfer.js'; // Needed for formatting bytes
 
 // Remove global selectedPeerId, use state.activeChatPeerId
 // let selectedPeerId = null; // DEPRECATED
 
 // Store active ObjectURLs to revoke them later
 const activeObjectURLs = new Set();
+
+// Store the peerId associated with the currently shown context menu
+let contextMenuPeerId = null;
 
 /**
  * Returns the currently selected peer ID from state.
@@ -112,6 +114,12 @@ function renderMessageContent(text) {
 
 // Generates a placeholder avatar color based on User ID
 function getAvatarColor(userId) {
+    // Add a check for invalid userId
+    if (!userId || typeof userId !== 'string') {
+        console.warn('getAvatarColor called with invalid userId:', userId);
+        return '2c2f33'; // Return a default color (e.g., dark gray)
+    }
+
     const colors = [
         '7289da', // Blurple
         '43b581', // Green
@@ -131,36 +139,59 @@ function getAvatarColor(userId) {
 
 // Renders HTML for a single message object (text or file meta)
 function createMessageHTML(message) {
-    const isLocal = message.senderId === state.localUserId;
-    const senderId = message.senderId;
-    const peerId = isLocal ? state.getActiveChatPeerId() : senderId; // Context peer for crypto checks etc.
+    // Add check for missing message or essential properties
+    if (!message || !message.timestamp) {
+        console.warn("createMessageHTML called with invalid message object:", message);
+        return '<div class="text-discord-text-muted text-xs italic p-2">[无效或损坏的消息]</div>'; // Return placeholder HTML
+    }
 
-    const senderName = isLocal
-        ? (state.contacts[state.localUserId]?.name || '我') // Use contact name if self is added, else '我'
-        : (state.contacts[senderId]?.name || senderId); // Use contact name or fallback to ID
+    // Robust handling for potentially missing senderId
+    let senderId = message.senderId;
+    let senderName = '未知用户'; // Default sender name
+    let isLocal = false;
 
-    const avatarColor = getAvatarColor(senderId);
-    const userColorClass = getUserColorClass(senderName);
+    if (senderId) {
+        isLocal = senderId === state.localUserId;
+        senderName = isLocal
+            ? (state.contacts[state.localUserId]?.name || '我')
+            : (state.contacts[senderId]?.name || senderId);
+    } else {
+        console.warn('Message object missing senderId:', message);
+        senderId = 'unknown'; // Assign a default ID for color/avatar generation
+    }
+
+    // const peerId = isLocal ? state.getActiveChatPeerId() : senderId; // Context peer - may not be needed directly here
+
+    const avatarColor = getAvatarColor(senderId); // Use potentially defaulted senderId
+    const userColorClass = getUserColorClass(senderName); // Use potentially defaulted senderName
     const timeString = formatTime(new Date(message.timestamp));
 
     // TODO: Update lock icon logic based on per-peer crypto state if implemented
-    // const peerKeys = state.getPeerKeys(peerId);
-    // const lockIcon = peerKeys?.sharedKey ? '<span ... title="端到端加密">lock</span>' : '';
     const lockIcon = ''; // Placeholder for now
 
-    const avatarText = escapeHTML(senderName.charAt(0).toUpperCase());
-    const senderNameEscaped = escapeHTML(senderName);
+    const avatarText = escapeHTML(senderName.charAt(0).toUpperCase()); // Use potentially defaulted senderName
+    const senderNameEscaped = escapeHTML(senderName); // Use potentially defaulted senderName
 
     let messageBodyHTML;
 
     if (message.type === 'text') {
-        messageBodyHTML = `<p class="text-discord-text-primary text-sm message-content">${renderMessageContent(message.payload.text)}</p>`;
+        // Add check for missing payload or text
+        if (message.payload && typeof message.payload.text === 'string') {
+            messageBodyHTML = `<p class="text-discord-text-primary text-sm message-content">${renderMessageContent(message.payload.text)}</p>`;
+        } else {
+            console.warn('Text message missing payload or text content:', message);
+            messageBodyHTML = '<p class="text-discord-text-muted text-xs italic">[消息内容丢失或损坏]</p>';
+        }
     } else if (message.type === 'fileMeta') {
-        // Render file metadata using the dedicated function
-        // Pass message.payload (fileInfo), isLocal, and potential initial state
-        messageBodyHTML = createFileContentHTML(message.payload, isLocal);
+        // Add check for missing payload
+        if (message.payload) {
+            messageBodyHTML = createFileContentHTML(message.payload, isLocal);
+        } else {
+            console.warn('FileMeta message missing payload:', message);
+            messageBodyHTML = '<p class="text-discord-text-muted text-xs italic">[文件信息丢失或损坏]</p>';
+        }
     } else {
-        messageBodyHTML = `<p class="text-discord-text-muted text-sm italic">[Unsupported message type: ${message.type}]</p>`;
+        messageBodyHTML = `<p class="text-discord-text-muted text-sm italic">[不支持的消息类型: ${escapeHTML(message.type)}]</p>`;
     }
 
     // Use data attributes for easy identification
@@ -246,9 +277,12 @@ export function hideActiveTypingIndicator() {
 // Renders just the content part of a file message (icon, name, size, status/action)
 // Used by createMessageHTML and updateFileMessageProgress
 function createFileContentHTML(fileInfo, isLocal, downloadUrl = null, progress = 0) {
-    const fileSizeFormatted = fileTransfer.formatBytes(fileInfo.size);
+    // Use formatBytes imported from utils.js
+    const fileSizeFormatted = formatBytes(fileInfo.size);
     const fileNameEscaped = escapeHTML(fileInfo.name);
     const transferId = fileInfo.transferId;
+    // Store original size and name as data attributes for later updates
+    const dataAttrs = `data-transfer-id="${transferId}" data-file-size="${fileInfo.size}" data-file-name="${fileNameEscaped}"`;
 
     const fileIconClasses = "material-symbols-outlined text-3xl text-discord-text-muted flex-shrink-0 mr-3";
     const downloadIconClasses = "material-symbols-outlined text-xl";
@@ -258,30 +292,33 @@ function createFileContentHTML(fileInfo, isLocal, downloadUrl = null, progress =
 
     let statusText = '';
     let iconHTML = `<span class="${fileIconClasses}">description</span>`; // Default file icon
-    let actionHTML = '';
+    let actionHTML = ''; // Initialize actionHTML, will be placed inside the container
 
     const isFailed = progress < 0;
     const isComplete = progress >= 1;
 
+    // --- Logic to determine icon, statusText, actionHTML based on progress ---
     if (isFailed) {
         statusText = `<div class="text-xs text-discord-red">${fileSizeFormatted} - 传输失败</div>`;
         iconHTML = `<span class="${errorIconClasses} flex-shrink-0 mr-3">error</span>`;
-    } else if (isComplete) {
+        actionHTML = ''; // No action on failure
+    } else if (isComplete) { // Handle completion actions
         if (downloadUrl) { // Receiver completed
             statusText = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted}</div>`;
+            // Generate download link HTML
             actionHTML = `
-                <a href="${downloadUrl}" download="${fileNameEscaped}" class="text-discord-text-muted hover:text-white ml-auto p-1 rounded hover:bg-discord-gray-3" title="下载">
+                <a href="${downloadUrl}" download="${fileNameEscaped}" class="text-discord-text-muted hover:text-white p-1 rounded hover:bg-discord-gray-3 download-link" title="下载">
                     <span class="${downloadIconClasses}">download</span>
                 </a>`;
-            // Store the URL to revoke later if needed
             activeObjectURLs.add(downloadUrl);
-            // Auto-revoke after some time? Or rely on clearMessageList?
         } else if (isLocal) { // Sender completed
             statusText = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted} - 已发送</div>`;
             iconHTML = `<span class="${checkIconClasses} flex-shrink-0 mr-3">check_circle</span>`;
-        } else { // Receiver completed (but URL not ready? fallback)
+            actionHTML = ''; // No action needed for sender on completion
+        } else { // Receiver completed (fallback if no URL)
              statusText = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted} - 已接收</div>`;
              iconHTML = `<span class="${checkIconClasses} flex-shrink-0 mr-3">check_circle</span>`;
+             actionHTML = ''; // No action if download URL missing
         }
     } else { // In progress
         const progressPercent = Math.round(progress * 100);
@@ -290,67 +327,240 @@ function createFileContentHTML(fileInfo, isLocal, downloadUrl = null, progress =
             <div class="w-full bg-discord-gray-1 rounded-full h-1 mt-1 overflow-hidden">
                 <div class="bg-discord-blurple h-1 rounded-full" style="width: ${progressPercent}%"></div>
             </div>`;
-        // Keep default icon or use a progress icon?
-        iconHTML = `<span class="${progressIconClasses} flex-shrink-0 mr-3">sync</span>`;
+        iconHTML = `<span class="${progressIconClasses} flex-shrink-0 mr-3 animate-spin">sync</span>`; // Add animate-spin here directly
     }
+    // --- End Status/Icon/Action Logic ---
 
-    // Data attribute for transfer ID on the container
+    // Apply data attributes to the container
     return `
-        <div class="mt-1 bg-discord-gray-3 p-3 rounded-lg flex items-center file-content" data-transfer-id="${transferId}">
+        <div class="mt-1 bg-discord-gray-3 p-3 rounded-lg flex items-center file-content" ${dataAttrs}>
             ${iconHTML}
             <div class="flex-1 min-w-0">
                  <div class="font-medium text-discord-text-link truncate" title="${fileNameEscaped}">${fileNameEscaped}</div>
                  ${statusText}
             </div>
-             ${actionHTML}
+            <div class="file-action-container ml-auto flex-shrink-0 pl-2">
+                ${actionHTML}
+            </div>
         </div>
     `;
 }
 
 // Updates the progress/status of an existing file message in the UI
 export function updateFileMessageProgress(peerId, transferId, progress, downloadUrl = null) {
+    // --- BEGIN LOGGING ---
+    console.log(`[UI Update] updateFileMessageProgress called for peer ${peerId}, transfer ${transferId}, progress ${progress}, url ${downloadUrl}`);
+    // --- END LOGGING ---
+
     const activePeerId = state.getActiveChatPeerId();
-    if (peerId !== activePeerId) return; // Only update visible chat
+    if (peerId !== activePeerId) {
+        // --- BEGIN LOGGING ---
+        console.log(`[UI Update] Skipping update for inactive peer ${peerId} (active: ${activePeerId})`);
+        // --- END LOGGING ---
+        return; // Only update visible chat
+    }
+
 
     if (dom.messageList) {
-        const messageElement = dom.messageList.querySelector(`[data-message-id="${transferId}"]`);
+        const messageElement = dom.messageList.querySelector(`.message-item[data-message-id="${transferId}"]`); // Select the outer message item
         if (messageElement) {
             const fileContentElement = messageElement.querySelector('.file-content');
-            const isLocal = messageElement.getAttribute('data-sender-id') === state.localUserId;
-             // Find fileInfo from message payload if possible, or make a minimal one
-            // This assumes the original message object might be needed, but it's complex to retrieve.
-            // We can reconstruct the essential parts needed for createFileContentHTML.
-            // A better approach might be to store fileInfo in state.incomingFiles more robustly.
-            let fileInfo = state.incomingFiles[transferId]?.info || {}; // Get from state if receiver
-            if (!fileInfo.name) {
-                 // Attempt to get name from existing element if state is unavailable
-                const nameElement = fileContentElement?.querySelector('.font-medium');
-                 fileInfo.name = nameElement?.title || 'unknown_file';
-                 // Guess size? Not ideal.
-                 fileInfo.size = fileInfo.size || 0;
+            if (!fileContentElement) {
+                 console.warn(`[UI Update] Could not find .file-content within message element for transfer ${transferId}`);
+                 return;
             }
-             fileInfo.transferId = transferId; // Ensure transferId is set
+            // --- BEGIN LOGGING ---
+            console.log(`[UI Update] Found messageElement and fileContentElement for ${transferId}`);
+            // --- END LOGGING ---
 
-            if (fileContentElement) {
-                 const newContentHTML = createFileContentHTML(fileInfo, isLocal, downloadUrl, progress);
-                 // Replace only the file content part
-                 fileContentElement.outerHTML = newContentHTML;
-            } else {
-                 console.warn(`Could not find .file-content within message element for transfer ${transferId}`);
+
+            // Read static file info from data attributes
+            const fileSize = parseInt(fileContentElement.dataset.fileSize || '0', 10);
+            const fileName = fileContentElement.dataset.fileName || 'unknown_file';
+            const fileSizeFormatted = formatBytes(fileSize); // Format the size read from attribute
+            // --- BEGIN LOGGING ---
+            console.log(`[UI Update] Read from data attributes - Size: ${fileSize}, Name: ${fileName}`);
+            // --- END LOGGING ---
+
+
+            const isLocal = messageElement.getAttribute('data-sender-id') === state.localUserId;
+
+            // Find existing elements to update
+            const iconElement = fileContentElement.querySelector('.material-symbols-outlined'); // First icon
+            const statusContainer = fileContentElement.querySelector('.flex-1.min-w-0'); // Select the parent container holding name and status/progress
+            const actionContainer = fileContentElement.querySelector('.file-action-container'); // Use the new specific class
+
+
+            // --- BEGIN State Check using data attribute ---
+            const hasReachedFinalState = messageElement.dataset.transferState === 'complete' || messageElement.dataset.transferState === 'failed';
+            // Check if the new update attempts to set an in-progress state
+            const isNewStateInProgress = progress >= 0 && progress < 1;
+
+            if (hasReachedFinalState && isNewStateInProgress) {
+                console.warn(`[UI Update ${transferId}] Ignoring attempt to set 'in progress' (progress: ${progress}) on an already completed/failed transfer.`);
+                return; // Prevent resetting UI from final state back to in-progress
             }
+            // --- END State Check using data attribute ---
+
+            // --- Update Logic ---
+            const isFailed = progress < 0;
+            const isComplete = progress >= 1;
+            let newIconClass = 'description'; // Default file icon
+            let newIconColorClass = 'text-discord-text-muted';
+            let newStatusHTML = ''; // Changed to hold full HTML for the status area
+            let spinClass = false;
+
+             // Determine new state based on progress
+             if (isFailed) {
+                 newIconClass = 'error';
+                 newIconColorClass = 'text-discord-red';
+                 const statusText = `${fileSizeFormatted} - 传输失败`;
+                 newStatusHTML = `<div class="text-xs text-discord-red">${statusText}</div>`; // Just the text div
+             } else if (isComplete) {
+                 let statusText = fileSizeFormatted; // Default for receiver completed
+                 newIconClass = 'description'; // Default icon for receiver
+                 if (downloadUrl) { // Receiver completed with URL
+                     // Status text remains just the size
+                 } else if (isLocal) { // Sender completed
+                     newIconClass = 'check_circle';
+                     newIconColorClass = 'text-discord-green';
+                     statusText = `${fileSizeFormatted} - 已发送`;
+                 } else { // Receiver completed (fallback if no URL)
+                     newIconClass = 'check_circle';
+                     newIconColorClass = 'text-discord-green';
+                     statusText = `${fileSizeFormatted} - 已接收`;
+                 }
+                 newStatusHTML = `<div class="text-xs text-discord-text-muted">${statusText}</div>`; // Just the text div
+             } else { // In progress
+                 const progressPercent = Math.round(progress * 100);
+                 newIconClass = 'sync';
+                 newIconColorClass = 'text-discord-blurple';
+                 spinClass = true;
+                 const statusText = `${fileSizeFormatted} - ${isLocal ? '正在发送' : '正在接收'} ${progressPercent}%`;
+                 // Generate HTML for text AND progress bar
+                 newStatusHTML = `
+                    <div class="text-xs text-discord-text-muted">${statusText}</div>
+                    <div class="w-full bg-discord-gray-1 rounded-full h-1 mt-1 overflow-hidden">
+                        <div class="bg-discord-blurple h-1 rounded-full" style="width: ${progressPercent}%"></div>
+                    </div>`;
+             }
+            // --- BEGIN LOGGING ---
+             console.log(`[UI Update ${transferId}] Determined state: isFailed=${isFailed}, isComplete=${isComplete}, spinClass=${spinClass}, newStatusHTML='${newStatusHTML}'`);
+            // --- END LOGGING ---
+
+            // Apply Updates
+            // 1. Update Icon
+            if (iconElement) {
+                // --- BEGIN LOGGING ---
+                console.log(`[UI Update ${transferId}] Updating icon to: ${newIconClass}, Color: ${newIconColorClass}, Spin: ${spinClass}`);
+                // --- END LOGGING ---
+                iconElement.textContent = newIconClass;
+                iconElement.classList.remove('text-discord-text-muted', 'text-discord-red', 'text-discord-green', 'text-discord-blurple', 'animate-spin'); // Remove all potential state classes
+                iconElement.classList.add(newIconColorClass); // Add the correct color
+                iconElement.classList.toggle('animate-spin', spinClass); // Use toggle for spin class
+            }
+
+            // 2. Update Status Area (Rebuild Content)
+            if (statusContainer) {
+                // --- MODIFICATION START: Use more specific selector for filename ---
+                const filenameDiv = statusContainer.querySelector('.font-medium.text-discord-text-link');
+                // --- MODIFICATION END ---
+
+                if (filenameDiv) {
+                    // --- MODIFICATION START: Rebuild status container content ---
+                    console.log(`[UI Update ${transferId}] Rebuilding status container content.`);
+                    // Store the filename element temporarily
+                    const tempFilenameDiv = filenameDiv.cloneNode(true);
+                    // Clear the container completely
+                    statusContainer.innerHTML = '';
+                    // Re-add the filename div
+                    statusContainer.appendChild(tempFilenameDiv);
+                    // Add the new status/progress HTML after the filename
+                    statusContainer.insertAdjacentHTML('beforeend', newStatusHTML);
+                    // --- MODIFICATION END ---
+                } else {
+                    // Fallback: If filename div is somehow missing, just set the whole container (less ideal)
+                    console.warn(`[UI Update ${transferId}] Filename div not found in status container. Setting innerHTML directly.`);
+                    // Construct the filename div HTML again for the fallback
+                    const fallbackFilenameHTML = `<div class="font-medium text-discord-text-link truncate" title="${fileName}">${fileName}</div>`;
+                    statusContainer.innerHTML = fallbackFilenameHTML + newStatusHTML;
+                }
+            } else {
+                 console.warn(`[UI Update ${transferId}] Status container (.flex-1.min-w-0) not found.`);
+            }
+
+
+             // 3. Update Action Area (Download Link)
+             if (actionContainer) {
+                 if (isComplete && downloadUrl) {
+                     // Receiver completed, update/show download link
+                     console.log(`[UI Update ${transferId}] Transfer complete for receiver. Updating download link. URL: ${downloadUrl}`);
+                     let linkElement = actionContainer.querySelector('a.download-link');
+                     if (!linkElement) {
+                         console.log(`[UI Update ${transferId}] Download link <a> not found, creating new one.`);
+                         linkElement = document.createElement('a');
+                         linkElement.className = 'text-discord-text-muted hover:text-white p-1 rounded hover:bg-discord-gray-3 download-link'; // Added p-1 for better click area
+                         linkElement.title = '下载';
+                         linkElement.innerHTML = '<span class="material-symbols-outlined text-xl">download</span>';
+                         actionContainer.innerHTML = ''; // Clear previous actions if any
+                         actionContainer.appendChild(linkElement);
+                     }
+                     linkElement.href = downloadUrl;
+                     linkElement.download = fileName; // Set filename for download
+                     linkElement.classList.remove('hidden'); // Ensure it's visible
+                     console.log(`[UI Update ${transferId}] Download link href set to: ${linkElement.href}, download attribute to: ${linkElement.download}`);
+
+                     // Add the URL to the active set if not already present
+                     if (!activeObjectURLs.has(downloadUrl)) {
+                         console.log(`[UI Update ${transferId}] Storing new ObjectURL in activeObjectURLs: ${downloadUrl}`);
+                         activeObjectURLs.add(downloadUrl);
+                     }
+
+                 } else if (isComplete || isFailed) {
+                     // Sender completed or transfer failed, hide/remove action container content
+                     console.log(`[UI Update ${transferId}] Transfer complete for sender or failed. Clearing action container.`);
+                     actionContainer.innerHTML = ''; // Remove download button or any previous content
+                 }
+                 // If in progress, actionContainer remains empty or unchanged
+             } else {
+                  console.warn(`[UI Update ${transferId}] Action container (.file-action-container) not found.`);
+             }
+             // --- END Download Link Logic ---
+
+             // --- BEGIN Completion Logging ---
+             if (isComplete) {
+                 console.log(`[UI Update ${transferId}] Handling COMPLETE state (Progress: ${progress}). Final Status HTML: '${newStatusHTML}'.`);
+             }
+             // --- END Completion Logging ---
+
+             // --- BEGIN Update data attribute for state tracking ---
+             if (isComplete) {
+                 messageElement.dataset.transferState = 'complete';
+                 // console.log(`[UI Update ${transferId}] Set data-transfer-state to 'complete'.`);
+             } else if (isFailed) {
+                 messageElement.dataset.transferState = 'failed';
+                 // console.log(`[UI Update ${transferId}] Set data-transfer-state to 'failed'.`);
+             }
+             // --- END Update data attribute ---
+
              // Revoke old URL if a new one is provided and different
              const oldUrl = messageElement.dataset.downloadUrl;
              if (oldUrl && downloadUrl && oldUrl !== downloadUrl && activeObjectURLs.has(oldUrl)) {
-                 console.log(`[UI Update] Revoking old ObjectURL: ${oldUrl}`);
+                 console.log(`[UI Update ${transferId}] Revoking old ObjectURL: ${oldUrl}`);
                  URL.revokeObjectURL(oldUrl);
                  activeObjectURLs.delete(oldUrl);
              }
-             // Store new URL if provided
+             // Store new URL in dataset if provided
              if (downloadUrl) {
                  messageElement.dataset.downloadUrl = downloadUrl;
+                 // Note: URL is added to activeObjectURLs when the link is created/updated now
+             }
+             else {
+                 // Ensure data attribute is removed if no URL (e.g., sender completes or failed)
+                 delete messageElement.dataset.downloadUrl;
              }
         } else {
-             console.warn(`Could not find message element for transfer ID: ${transferId} to update progress.`);
+             console.warn(`[UI Update] Could not find message element for transfer ID: ${transferId} to update progress.`);
         }
     }
 }
@@ -359,22 +569,22 @@ export function updateFileMessageProgress(peerId, transferId, progress, download
 
 // Re-renders the entire contact list based on state.contacts
 export function renderContactList() {
-    if (!dom.contactListDiv) return;
+    if (!dom.contactsListContainer) return;
 
-    dom.contactListDiv.innerHTML = ''; // Clear existing list
+    dom.contactsListContainer.innerHTML = ''; // Clear existing list
 
     const contactsArray = Object.values(state.contacts);
     // Sort contacts? Maybe alphabetically? Optional.
     contactsArray.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
 
     if (contactsArray.length === 0) {
-        dom.contactListDiv.innerHTML = '<p class="text-discord-text-muted text-sm px-3 py-2">还没有联系人。</p>';
+        dom.contactsListContainer.innerHTML = '<p class="text-discord-text-muted text-sm px-3 py-2">还没有联系人。</p>';
         return;
     }
 
     contactsArray.forEach(contact => {
         const contactElement = createContactItemElement(contact);
-        dom.contactListDiv.appendChild(contactElement);
+        dom.contactsListContainer.appendChild(contactElement);
     });
 }
 
@@ -412,29 +622,25 @@ function createContactItemElement(contact) {
         </div>
         <span class="flex-1 text-discord-text-primary truncate font-medium text-sm contact-name">${nameEscaped}</span>
         ${unreadIndicatorHTML}
-        <!-- Add delete button? Needs careful implementation -->
-        <!-- <button class="delete-contact-btn material-symbols-outlined text-xs text-discord-text-muted hover:text-discord-red ml-auto hidden group-hover:block" title="删除联系人">delete</button> -->
+        <!-- Remove delete button here if it existed -->
     `;
 
-    // Add click listener to the main element
+    // Add click listener to the main element for selecting chat
     element.addEventListener('click', handleContactClick);
 
-    // Optional: Add listener for delete button if implemented
-    // const deleteBtn = element.querySelector('.delete-contact-btn');
-    // if (deleteBtn) {
-    //     deleteBtn.addEventListener('click', (e) => {
-    //         e.stopPropagation(); // Prevent contact click event
-    //         handleDeleteContact(contact.id);
-    //     });
-    // }
+    // --- NEW: Add contextmenu listener ---
+    element.addEventListener('contextmenu', (event) => {
+        showContextMenu(event, contact.id);
+    });
+    // --- End NEW ---
 
     return element;
 }
 
 // Updates the online status indicator and title for a specific contact in the list
 export function updateContactStatusUI(peerId, status) { // status: boolean | 'connecting'
-    if (!dom.contactListDiv) return;
-    const contactElement = dom.contactListDiv.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
+    if (!dom.contactsListContainer) return;
+    const contactElement = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
     if (contactElement) {
         const img = contactElement.querySelector('img');
         const statusIndicatorContainer = contactElement.querySelector('.relative'); // Container for avatar + status
@@ -472,8 +678,8 @@ export function updateContactStatusUI(peerId, status) { // status: boolean | 'co
 
 // Shows or hides the unread message indicator for a contact
 export function showUnreadIndicator(peerId, show) {
-    if (!dom.contactListDiv) return;
-    const contactElement = dom.contactListDiv.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
+    if (!dom.contactsListContainer) return;
+    const contactElement = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
     if (contactElement) {
         const indicator = contactElement.querySelector('.unread-indicator');
         if (indicator) {
@@ -501,8 +707,8 @@ export async function handleContactClick(event) {
 
     // 2. Update UI Selection Highlight
     // Remove highlight from previously selected contact
-    if (currentActivePeerId && dom.contactListDiv) {
-        const previousElement = dom.contactListDiv.querySelector(`.contact-item[data-peer-id="${currentActivePeerId}"]`);
+    if (currentActivePeerId && dom.contactsListContainer) {
+        const previousElement = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${currentActivePeerId}"]`);
         if (previousElement) {
             previousElement.classList.remove('bg-discord-gray-4');
             previousElement.classList.add('hover:bg-discord-gray-3');
@@ -534,26 +740,19 @@ export async function handleContactClick(event) {
     // 9. Focus input field? (Optional)
     // if (dom.chatInput) dom.chatInput.focus();
 
-     // 10. Check connection status and *potentially* initiate connection if offline? (Decision Point)
-     // Option A: Connect automatically if offline when clicked
-     /*
+     // 10. Check connection status and initiate connection if offline/disconnected
      const connectionStatus = state.getConnectionState(clickedPeerId);
      if (connectionStatus !== 'connected' && connectionStatus !== 'connecting') {
-         console.log(`Contact ${clickedPeerId} is offline or disconnected. Attempting to connect...`);
-         addSystemMessage(`正在尝试连接到 ${state.contacts[clickedPeerId]?.name || clickedPeerId}...`, clickedPeerId);
+         console.log(`Contact ${clickedPeerId} is ${connectionStatus}. Attempting to connect...`);
          try {
-             await connection.connectToPeer(clickedPeerId);
-             // Connection attempt initiated. UI status will update via events.
+             connection.connectToPeer(clickedPeerId);
          } catch (e) {
               console.error(`Failed to initiate connection via click to ${clickedPeerId}:`, e);
               addSystemMessage(`无法发起与 ${state.contacts[clickedPeerId]?.name || clickedPeerId} 的连接。`, clickedPeerId, true);
          }
      } else {
-          console.log(`Contact ${clickedPeerId} is already ${connectionStatus}.`);
+          console.log(`Contact ${clickedPeerId} is already ${connectionStatus}. No new connection initiated.`);
      }
-     */
-     // Option B: Clicking only switches view, connection happens separately (e.g., on receiving offer, or manual connect button)
-     // Current implementation follows Option B - clicking contact does *not* auto-connect.
 }
 
 // Updates the header of the chat area
@@ -594,21 +793,21 @@ function updateChatHeader(peerId) {
 
 // --- Input Area Visibility ---
 export function updateChatInputVisibility(forceVisible = null) {
-    if (!dom.chatInputContainer) return;
+    if (!dom.chatInputContainer) {
+        console.error("UI Error: dom.chatInputContainer is null or undefined in updateChatInputVisibility!");
+        return; // Exit if the element doesn't exist
+    }
     let shouldBeVisible = false;
 
     if (forceVisible !== null) {
         shouldBeVisible = forceVisible;
     } else {
         const activePeerId = state.getActiveChatPeerId();
-        if (activePeerId) {
-            const connState = state.getConnectionState(activePeerId);
-            const dc = state.getDataChannel(activePeerId);
-            // Require connection to be fully 'connected' AND data channel to be 'open'
-            shouldBeVisible = connState === 'connected' && dc?.readyState === 'open';
-        }
+        // Show the input container if *any* contact is selected
+        shouldBeVisible = !!activePeerId; // Changed: Now depends only on whether a chat is active
     }
 
+    console.log(`[UI Debug] Updating input visibility. Element:`, dom.chatInputContainer, `Should be visible: ${shouldBeVisible}`); // Added log
     dom.chatInputContainer.classList.toggle('hidden', !shouldBeVisible);
 
     // Also update chat header when input visibility changes
@@ -655,6 +854,224 @@ export function clearChatInput() {
     }
 }
 
+// --- Context Menu Logic ---
+
+/**
+ * Shows the custom context menu for a contact item.
+ * @param {MouseEvent} event The contextmenu event.
+ * @param {string} peerId The ID of the contact.
+ */
+function showContextMenu(event, peerId) {
+    event.preventDefault(); // Prevent the default browser context menu
+    contextMenuPeerId = peerId; // Store the peer ID for the action
+
+    if (!dom.contactContextMenu) return;
+
+    const contact = state.contacts[peerId];
+    const name = contact?.name || peerId;
+
+    // Populate the menu (currently only delete)
+    dom.contactContextMenu.innerHTML = `
+        <a href="#" id="delete-contact-action" class="block px-4 py-1.5 text-discord-red hover:bg-discord-gray-3">
+            <span class="material-symbols-outlined text-sm mr-2 align-middle">delete</span>删除 "${escapeHTML(name)}"
+        </a>
+        <a href="#" id="clear-history-action" class="block px-4 py-1.5 text-discord-text-muted hover:bg-discord-gray-3">
+             <span class="material-symbols-outlined text-sm mr-2 align-middle">delete_sweep</span>清空聊天记录
+        </a>
+        <!-- Add more menu items here if needed -->
+    `;
+
+    // Add event listener for the delete action
+    const deleteAction = dom.contactContextMenu.querySelector('#delete-contact-action');
+    if (deleteAction) {
+        deleteAction.addEventListener('click', (e) => {
+            e.preventDefault();
+            handleDeleteContact(contextMenuPeerId);
+            hideContextMenu();
+        });
+    }
+
+    // --- NEW: Add event listener for clear history action ---
+    const clearHistoryAction = dom.contactContextMenu.querySelector('#clear-history-action');
+    if (clearHistoryAction) {
+         clearHistoryAction.addEventListener('click', (e) => {
+             e.preventDefault();
+             handleClearHistory(contextMenuPeerId);
+             hideContextMenu();
+         });
+    }
+    // --- End NEW ---
+
+    // Position the menu
+    // Basic positioning: place near the cursor
+    // Improvement: Check bounds to ensure menu stays within viewport
+    const menuWidth = dom.contactContextMenu.offsetWidth;
+    const menuHeight = dom.contactContextMenu.offsetHeight;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    let top = event.clientY;
+    let left = event.clientX;
+
+    // Adjust if menu goes off-screen horizontally
+    if (left + menuWidth > viewportWidth) {
+        left = viewportWidth - menuWidth - 5; // Add some padding
+    }
+    // Adjust if menu goes off-screen vertically
+    if (top + menuHeight > viewportHeight) {
+        top = viewportHeight - menuHeight - 5; // Add some padding
+    }
+
+    dom.contactContextMenu.style.top = `${top}px`;
+    dom.contactContextMenu.style.left = `${left}px`;
+
+    // Show the menu
+    dom.contactContextMenu.classList.remove('hidden');
+
+    // Add a one-time click listener to the window to hide the menu
+    // Use setTimeout to prevent the same click from immediately hiding it
+    setTimeout(() => {
+        window.addEventListener('click', hideContextMenuOnClickOutside, { once: true });
+        window.addEventListener('contextmenu', hideContextMenuOnClickOutside, { once: true }); // Also hide on another context menu click
+    }, 0);
+}
+
+/**
+ * Hides the custom context menu.
+ */
+function hideContextMenu() {
+    if (dom.contactContextMenu) {
+        dom.contactContextMenu.classList.add('hidden');
+    }
+    contextMenuPeerId = null; // Clear stored peer ID
+    // Ensure the global listeners are removed if they weren't triggered
+    window.removeEventListener('click', hideContextMenuOnClickOutside);
+    window.removeEventListener('contextmenu', hideContextMenuOnClickOutside);
+}
+
+/**
+ * Event listener callback to hide the context menu if the click is outside it.
+ * @param {MouseEvent} event
+ */
+function hideContextMenuOnClickOutside(event) {
+    if (dom.contactContextMenu && !dom.contactContextMenu.contains(event.target)) {
+        hideContextMenu();
+    } else {
+        // Re-attach listener if click was inside, because 'once' removes it
+         setTimeout(() => {
+            window.addEventListener('click', hideContextMenuOnClickOutside, { once: true });
+             window.addEventListener('contextmenu', hideContextMenuOnClickOutside, { once: true });
+        }, 0);
+    }
+}
+
+/**
+ * Handles the deletion of a contact after confirmation.
+ * Also deletes associated chat history.
+ * @param {string} peerId The ID of the contact to delete.
+ */
+async function handleDeleteContact(peerId) { // Added async keyword
+    if (!peerId) return;
+
+    const contact = state.contacts[peerId];
+    const name = contact?.name || peerId;
+
+    // Confirmation dialog
+    if (confirm(`您确定要删除联系人 "${escapeHTML(name)}" 吗？\n相关的聊天记录和连接状态将被清除。`)) {
+        console.log(`Confirmed deletion for ${peerId}`);
+
+        // --- Begin Deletion Process ---
+        let historyDeleted = false;
+        try {
+            // 1. Attempt to delete chat history first
+            await storage.deleteMessagesForPeer(peerId);
+            console.log(`Successfully initiated deletion of history for ${peerId}.`);
+            historyDeleted = true; // Mark history deletion as successful (or at least initiated without error)
+
+            // 2. Remove contact from state and localStorage (which also resets peer state)
+            const success = state.removeContact(peerId);
+
+            if (success) {
+                console.log(`Contact ${peerId} removed from state.`);
+                renderContactList(); // Re-render the list to reflect removal
+
+                // If the deleted contact was the active chat, update the main panel
+                if (state.getActiveChatPeerId() === null) {
+                    clearMessageList();
+                    hideActiveTypingIndicator();
+                    updateChatHeader(null);
+                    updateChatInputVisibility(false);
+                    updateEmptyState();
+                }
+                addSystemMessage(`联系人 ${escapeHTML(name)} 已删除。`, null); // Global confirmation
+            } else {
+                // This case might be less likely if removeContact is robust, but handle it
+                console.error(`Failed to remove contact ${peerId} from state after history deletion.`);
+                addSystemMessage(`删除联系人 ${escapeHTML(name)} 时发生错误（状态更新失败）。`, null, true);
+            }
+
+        } catch (error) {
+            // Catch errors from either deleteMessagesForPeer or potentially removeContact if it threw
+            console.error(`Error during deletion process for ${peerId}:`, error);
+            if (!historyDeleted) {
+                 addSystemMessage(`删除联系人 ${escapeHTML(name)} 的聊天记录时出错。联系人本身可能未被删除。`, null, true);
+            } else {
+                 // History was likely deleted, but removing contact from state failed
+                 addSystemMessage(`删除联系人 ${escapeHTML(name)} 时发生错误（联系人状态或记录未能完全清除）。`, null, true);
+                 // Consider attempting to re-render the contact list anyway, though state might be inconsistent
+                 renderContactList();
+            }
+        }
+        // --- End Deletion Process ---
+
+    } else {
+        console.log(`Deletion cancelled for ${peerId}`);
+    }
+}
+
+// --- NEW: Handle clearing chat history ---
+/**
+ * Handles clearing local chat history for a specific contact after confirmation.
+ * @param {string} peerId The ID of the contact whose history should be cleared.
+ */
+async function handleClearHistory(peerId) {
+    if (!peerId) {
+        console.warn("handleClearHistory called without peerId.");
+        return;
+    }
+
+    const contact = state.contacts[peerId];
+    const name = contact?.name || peerId;
+
+    // Confirmation dialog
+    if (confirm(`您确定要清空与 "${escapeHTML(name)}" 的本地聊天记录吗？\n此操作不可恢复。`)) {
+        console.log(`Confirmed clearing history for ${peerId}`);
+
+        try {
+            // Call storage function to delete messages
+            await storage.deleteMessagesForPeer(peerId);
+            console.log(`Successfully initiated deletion of history for ${peerId}.`);
+
+            // If the cleared chat is currently active, update the UI
+            if (state.getActiveChatPeerId() === peerId) {
+                console.log(`Chat history for active peer ${peerId} cleared. Updating UI.`);
+                clearMessageList(); // Clear messages from the UI
+                updateEmptyState(); // Show the appropriate empty state message
+            }
+
+            // Show confirmation message
+            addSystemMessage(`与 ${escapeHTML(name)} 的本地聊天记录已清空。`, null); // Global message
+
+        } catch (error) {
+            console.error(`Error clearing history for ${peerId}:`, error);
+            addSystemMessage(`清空 ${escapeHTML(name)} 的聊天记录时出错。`, null, true); // Global error message
+        }
+    } else {
+        console.log(`Clearing history cancelled for ${peerId}`);
+    }
+}
+// --- END NEW ---
+
 // --- Initialization ---
 export function initializeUI() {
     console.log("Initializing UI...");
@@ -670,6 +1087,9 @@ export function initializeUI() {
      updateChatHeader(null);
     // Clear any leftover typing indicators
     hideActiveTypingIndicator();
+
+    // Hide context menu initially (redundant due to 'hidden' class, but good practice)
+    hideContextMenu();
 
     console.log("UI Initialized.");
 }
