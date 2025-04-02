@@ -23,11 +23,11 @@ const emptyMessageListDiv = document.getElementById('empty-message-list');
 let ws = null;
 let peerConnection = null;
 let dataChannel = null;
-let localUserId = `user-${Date.now().toString().slice(-6)}`;
+const signalingServerUrl = 'wss://signal.smartpig.top/ws';
+let localUserId = `user-${Math.random().toString(36).substring(2, 8)}`;
 let remoteUserId = null;
 let isConnected = false;
 let isConnecting = false;
-const signalingServerUrl = 'ws://signal.smartpig.top:8080/ws';
 // ------------------------------------
 
 const peerConnectionConfig = {
