@@ -123,24 +123,6 @@ input:focus {
     color: #ffffff; /* Keep active text color */
 }
 
-/* Style for active contact item */
-.contact-item.active {
-    background-color: #3f454f; /* Slightly darker than hover */
-    color: #ffffff; /* White text */
-    font-weight: 500;
-}
-
-/* Ensure hover doesn't override active background, but text color can change */
-.contact-item.active:hover {
-    background-color: #3f454f; /* Keep active background */
-    color: #ffffff; /* Keep active text color */
-}
-
-/* Hide scrollbar buttons (optional) */
-::-webkit-scrollbar-button {
-    display: none;
-}
-
 /* Status indicator styles */
 .contact-status-indicator {
     /* Base size & shape defined in HTML via Tailwind, add border */

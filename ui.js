@@ -1,11 +1,14 @@
 // ui.js
 import * as dom from './dom.js';
 import * as state from './state.js';
-import { escapeHTML, formatTime, mockUsers, getUserColorClass } from './utils.js';
+import { escapeHTML, formatTime, getUserColorClass } from './utils.js';
 import * as connection from './connection.js'; // Import connection to call loadAndDisplayHistory
 import * as storage from './storage.js'; // Import storage for potential future use (e.g., removing contacts)
 
 let selectedPeerId = null; // Track the currently selected contact in the UI
+
+// Store active ObjectURLs to revoke them later
+const activeObjectURLs = new Set();
 
 /**
  * Returns the currently selected peer ID.
@@ -31,9 +34,19 @@ export function scrollToBottom() {
 
 /**
  * Clears text, system, and file messages from the message list UI.
+ * Revokes any active ObjectURLs associated with file messages.
  */
 export function clearMessageList() {
     if (dom.messageList) {
+        // Revoke Object URLs before clearing
+        dom.messageList.querySelectorAll('.file-message-container[data-download-url]').forEach(el => {
+            const url = el.dataset.downloadUrl;
+            if (url && activeObjectURLs.has(url)) {
+                console.log(`[UI Cleanup] Revoking ObjectURL: ${url}`);
+                URL.revokeObjectURL(url);
+                activeObjectURLs.delete(url);
+            }
+        });
         dom.messageList.innerHTML = ''; // Clear all messages
         updateEmptyState(); // Update the empty state indicator
     }
@@ -85,23 +98,51 @@ function renderMessageContent(text) {
     });
 }
 
+// Generates a placeholder avatar color based on User ID
+function getAvatarColor(userId) {
+    const colors = [
+        '7289da', // Blurple
+        '43b581', // Green
+        'f04747', // Red
+        'faa61a', // Yellow/Orange
+        '3498db', // Blue
+        '9b59b6', // Purple
+        'e91e63', // Pink
+        '1abc9c'  // Teal
+    ];
+    let hash = 0;
+    for (let i = 0; i < userId.length; i++) {
+        hash = userId.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colors[Math.abs(hash % colors.length)];
+}
+
 function createP2PMessageHTML(msgData) {
-    const sender = msgData.isLocal ? (mockUsers.find(u => u.id === state.localUserId) || { name: state.localUserId || '我', avatar: '5865f2' })
-                                   : (mockUsers.find(u => u.id === msgData.peerId) || { name: msgData.peerId || '远程用户', avatar: '99aab5' });
-    const avatarColor = sender?.avatar || '5865f2';
-    const userColorClass = getUserColorClass(sender.name);
+    const senderId = msgData.isLocal ? state.localUserId : msgData.peerId;
+    // Get name: Use contact name if available, otherwise use the ID
+    const senderName = msgData.isLocal
+                        ? (state.contacts[senderId]?.name || state.localUserId || '我') // Local user might have a name in contacts if added self?
+                        : (state.contacts[senderId]?.name || senderId || '远程用户');
+
+    // Use generated avatar color based on ID
+    const avatarColor = getAvatarColor(senderId);
+    // Use name for color class calculation
+    const userColorClass = getUserColorClass(senderName);
     const timeString = formatTime(new Date(msgData.timestamp));
     // Show lock icon if connected to this specific peer and E2EE is active
     const lockIcon = state.sharedKey && state.isConnected && msgData.peerId === state.remoteUserId
                      ? '<span class="material-symbols-outlined text-xs ml-1 text-discord-green align-middle" title="端到端加密">lock</span>'
                      : '';
 
+    const avatarText = escapeHTML(senderName.charAt(0).toUpperCase());
+    const senderNameEscaped = escapeHTML(senderName);
+
     return (
        `<div class="flex items-start space-x-3 group message-item py-1 pr-4 hover:bg-discord-gray-4/30 rounded">\
-            <img src="https://placehold.co/40x40/${avatarColor}/ffffff?text=${escapeHTML(sender.name.charAt(0).toUpperCase())}" alt="${escapeHTML(sender.name)} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer" title="${escapeHTML(sender.name)}" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">\
+            <img src="https://placehold.co/40x40/${avatarColor}/ffffff?text=${avatarText}" alt="${senderNameEscaped} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer" title="${senderNameEscaped} (${senderId})" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">\
             <div class="flex-1">\
                 <div class="flex items-baseline space-x-2">\
-                    <span class="${userColorClass} font-medium hover:underline cursor-pointer">${escapeHTML(sender.name)}</span>\
+                    <span class="${userColorClass} font-medium hover:underline cursor-pointer">${senderNameEscaped}</span>\
                     <span class="text-xs text-discord-text-muted message-timestamp" title="${new Date(msgData.timestamp).toLocaleString('zh-CN')}">${timeString}</span>\
                     ${lockIcon}\
                 </div>\
@@ -129,7 +170,8 @@ export function addP2PMessageToList(msgData) {
 export function showTypingIndicator() {
     // Only show if the typing peer is the currently selected AND connected peer
     if (!dom.typingIndicator || !dom.typingUsersSpan || !state.isConnected || state.remoteUserId !== selectedPeerId) return;
-    const remoteName = state.contacts[state.remoteUserId]?.name || mockUsers.find(u => u.id === state.remoteUserId)?.name || state.remoteUserId || '对方';
+    // Get name from contacts, fallback to ID
+    const remoteName = state.contacts[state.remoteUserId]?.name || state.remoteUserId || '对方';
     dom.typingUsersSpan.textContent = escapeHTML(remoteName);
     dom.typingIndicator.classList.remove('hidden');
     dom.typingIndicator.classList.add('flex');
@@ -147,16 +189,16 @@ export function hideTypingIndicator() {
 function createFileMessageHTML(fileInfo, isLocal, downloadUrl = null, progress = 0) {
     // Determine peerId based on context
     const peerIdForDisplay = fileInfo.peerId || (isLocal ? state.localUserId : (state.remoteUserId || '未知发送者'));
-     // Try to get name from contacts first, fallback to mockUsers or ID
+    // Get name: Use contact name if available, otherwise use the ID
     const senderName = isLocal
-        ? (state.localUserId || '我')
-        : (state.contacts[peerIdForDisplay]?.name || mockUsers.find(u => u.id === peerIdForDisplay)?.name || peerIdForDisplay);
+        ? (state.contacts[state.localUserId]?.name || state.localUserId || '我')
+        : (state.contacts[peerIdForDisplay]?.name || peerIdForDisplay || '远程用户');
 
-    const sender = isLocal ? { name: senderName, avatar: '5865f2' } // Assuming local user always uses blurple avatar
-                           : { name: senderName, avatar: mockUsers.find(u => u.id === peerIdForDisplay)?.avatar || '99aab5' }; // Use mock avatar or default gray
+    // Use generated avatar color based on ID
+    const avatarColor = getAvatarColor(peerIdForDisplay);
+    // Use name for color class calculation
+    const userColorClass = getUserColorClass(senderName);
 
-    const avatarColor = sender.avatar; // Use determined avatar color
-    const userColorClass = getUserColorClass(sender.name);
     const timeString = formatTime(new Date(fileInfo.timestamp || Date.now()));
     const fileSizeMB = (fileInfo.size / 1024 / 1024).toFixed(2);
     const fileNameEscaped = escapeHTML(fileInfo.name);
@@ -176,7 +218,7 @@ function createFileMessageHTML(fileInfo, isLocal, downloadUrl = null, progress =
     // Message structure common parts
     const messageHeader = `
         <div class="flex items-baseline space-x-2">
-            <span class="${userColorClass} font-medium hover:underline cursor-pointer">${escapeHTML(sender.name)}</span>
+            <span class="${userColorClass} font-medium hover:underline cursor-pointer">${senderName}</span>
             <span class="text-xs text-discord-text-muted message-timestamp" title="${new Date(fileInfo.timestamp || Date.now()).toLocaleString('zh-CN')}">${timeString}</span>
         </div>`;
 
@@ -229,7 +271,7 @@ function createFileMessageHTML(fileInfo, isLocal, downloadUrl = null, progress =
 
     return (
         `<div class="flex items-start space-x-3 group message-item file-message-container py-1 pr-4 hover:bg-discord-gray-4/30 rounded" data-transfer-id="${transferId}">\
-            <img src="https://placehold.co/40x40/${avatarColor}/ffffff?text=${escapeHTML(sender.name.charAt(0).toUpperCase())}" alt="${escapeHTML(sender.name)} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer" title="${escapeHTML(sender.name)}" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">\
+            <img src="https://placehold.co/40x40/${avatarColor}/ffffff?text=${escapeHTML(senderName.charAt(0).toUpperCase())}" alt="${senderName} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer" title="${senderName} (${peerIdForDisplay})" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">\
             <div class="flex-1">\
                 ${messageHeader}\
                 ${fileContentHTML}\
@@ -246,28 +288,42 @@ export function addFileMessageToList(fileInfo, isLocal, downloadUrl = null, prog
     }
 
     const transferId = fileInfo.transferId;
-    const existingMsgElement = dom.messageList.querySelector(`.file-message-container[data-transfer-id="${transferId}"]`);
+    const existingMsgElement = dom.messageList.querySelector(`.file-message-container[data-transfer-id=\"${transferId}\"]`);
+
+    const newHTML = createFileMessageHTML(fileInfo, isLocal, downloadUrl, progress);
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = newHTML;
+    const newElement = tempDiv.firstElementChild;
+
+    if (!newElement) return; // Should not happen if HTML is valid
+
+    // If a download URL is present, store it in the dataset and track it
+    if (downloadUrl) {
+        newElement.dataset.downloadUrl = downloadUrl;
+        if (!activeObjectURLs.has(downloadUrl)) {
+             activeObjectURLs.add(downloadUrl);
+             console.log(`[UI Tracking] Added ObjectURL: ${downloadUrl}`);
+        }
+    } else {
+         // Ensure dataset attribute is removed if URL is no longer valid (e.g., progress update)
+         delete newElement.dataset.downloadUrl;
+    }
 
     if (existingMsgElement) {
         // Update existing message
-        const newHTML = createFileMessageHTML(fileInfo, isLocal, downloadUrl, progress);
-        // Create a temporary div to parse the new HTML
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = newHTML;
-        const newElement = tempDiv.firstElementChild;
-        if (newElement) {
-            existingMsgElement.replaceWith(newElement);
+        // Check if the existing element had a URL that needs revoking (e.g., replaced before download)
+        const oldUrl = existingMsgElement.dataset.downloadUrl;
+        if (oldUrl && oldUrl !== downloadUrl && activeObjectURLs.has(oldUrl)) {
+            console.log(`[UI Cleanup] Revoking old ObjectURL during update: ${oldUrl}`);
+            URL.revokeObjectURL(oldUrl);
+            activeObjectURLs.delete(oldUrl);
         }
+        existingMsgElement.replaceWith(newElement);
     } else {
         // Add new message
-        const messageHTML = createFileMessageHTML(fileInfo, isLocal, downloadUrl, progress);
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = messageHTML;
-         if (tempDiv.firstElementChild) {
-             dom.messageList.appendChild(tempDiv.firstElementChild);
-             scrollToBottom(); // Scroll only when adding a new message element
-             updateEmptyState();
-         }
+        dom.messageList.appendChild(newElement);
+        scrollToBottom(); // Scroll only when adding a new message element
+        updateEmptyState();
     }
     // Removed call to addContactToList
 }
@@ -283,37 +339,60 @@ export function populateMemberList() {
      let onlineCount = 0;
      let offlineCount = 0;
 
+     // Helper to create HTML for a member item
      const createMemberHTML = (userId, isOnline) => {
-         const user = mockUsers.find(u => u.id === userId) || { name: userId, avatar: '99aab5' }; // Fallback
-         const avatarColor = user.avatar;
+         // Get name from contacts or use ID
+         const name = state.contacts[userId]?.name || userId;
+         const avatarColor = getAvatarColor(userId);
+         const avatarText = escapeHTML(name.charAt(0).toUpperCase());
          const statusClass = isOnline ? 'bg-discord-green' : 'bg-gray-500';
          const statusTitle = isOnline ? '在线' : '离线';
-         const userColorClass = getUserColorClass(user.name);
+         const userColorClass = getUserColorClass(name);
+         const nameEscaped = escapeHTML(name);
 
          return `
              <div class="flex items-center space-x-2 group">
                  <div class="relative flex-shrink-0">
-                     <img src="https://placehold.co/32x32/${avatarColor}/ffffff?text=${escapeHTML(user.name.charAt(0).toUpperCase())}" alt="${escapeHTML(user.name)} 头像" class="rounded-full" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
+                     <img src="https://placehold.co/32x32/${avatarColor}/ffffff?text=${avatarText}" alt="${nameEscaped} 头像" class="rounded-full" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
                      <span class="absolute bottom-0 right-0 block h-2.5 w-2.5 ${statusClass} border-2 border-discord-gray-2 rounded-full" title="${statusTitle}"></span>
                  </div>
-                 <span class="${userColorClass} text-sm truncate group-hover:underline cursor-pointer">${escapeHTML(user.name)}</span>
+                 <span class="${userColorClass} text-sm truncate group-hover:underline cursor-pointer" title="${nameEscaped} (${userId})">${nameEscaped}</span>
              </div>`;
      };
 
-     // Always add local user (assume online for now, could be refined)
+     // Add local user (always online in this list)
      dom.onlineListContainer.innerHTML += createMemberHTML(state.localUserId, true);
      onlineCount++;
 
-     // Add remote user if connected
-     if (state.isConnected && state.remoteUserId) {
-         dom.onlineListContainer.innerHTML += createMemberHTML(state.remoteUserId, true);
-         onlineCount++;
-     } else if (selectedPeerId && selectedPeerId !== state.remoteUserId) {
-         // Show selected peer as offline if not connected
-         dom.offlineListContainer.innerHTML += createMemberHTML(selectedPeerId, false);
-         offlineCount++;
+     // Iterate through contacts to populate lists
+     Object.values(state.contacts).forEach(contact => {
+         if (contact.id === state.localUserId) return; // Skip self if already added
+
+         // Determine status: online if actively connected, otherwise use contact.online (from state)
+         const isOnline = state.isConnected && state.remoteUserId === contact.id;
+         // Alternatively, use contact.online if the signaling server provided this info?
+         // const isOnline = contact.online;
+
+         if (isOnline) {
+             dom.onlineListContainer.innerHTML += createMemberHTML(contact.id, true);
+             onlineCount++;
+         } else {
+             dom.offlineListContainer.innerHTML += createMemberHTML(contact.id, false);
+             offlineCount++;
+         }
+     });
+
+     // Simplified logic: If a peer is selected but not connected, show them as offline
+     // This might be redundant with the loop above, depending on how contact.online is managed
+     /*
+     if (selectedPeerId && (!state.isConnected || state.remoteUserId !== selectedPeerId) && !state.contacts[selectedPeerId]?.online) {
+         const existingOffline = dom.offlineListContainer.querySelector(`[title*="(${selectedPeerId})"]`);
+         if (!existingOffline) { // Avoid adding duplicate if already in offline list from contacts loop
+             dom.offlineListContainer.innerHTML += createMemberHTML(selectedPeerId, false);
+             offlineCount++;
+         }
      }
-      // TODO: Maybe populate offline list from state.contacts? For now, keeps it simple.
+     */
 
      dom.onlineCountSpan.textContent = onlineCount;
      dom.offlineCountSpan.textContent = offlineCount;
@@ -363,12 +442,14 @@ export function renderContactList() {
 function createContactItemElement(contact) {
     const peerId = contact.id;
     const name = contact.name || peerId; // Fallback name to ID
-    const isOnline = contact.online;
+    // Use connection state for online status primarily
+    const isOnline = state.isConnected && state.remoteUserId === peerId;
+    // const isOnline = contact.online; // Use this if state.contact.online becomes reliable
 
-    // Use mock avatar if available, otherwise generate placeholder
-    const user = mockUsers.find(u => u.id === peerId);
-    const avatarColor = user?.avatar || '7289da'; // Default Discord blurple
+    // Use generated avatar color based on ID
+    const avatarColor = getAvatarColor(peerId);
     const avatarText = escapeHTML(name.charAt(0).toUpperCase());
+    const nameEscaped = escapeHTML(name);
 
     const element = document.createElement('a');
     element.href = '#'; // Prevent page jump
@@ -384,25 +465,10 @@ function createContactItemElement(contact) {
              <span class="contact-status-indicator ${statusClass} absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full" title="${statusTitle}"></span>
         </div>
         <span class="contact-name truncate flex-1">${escapeHTML(name)}</span>
-        <!-- <button class="delete-contact-btn material-symbols-outlined ml-auto text-xs opacity-0 group-hover:opacity-100 text-discord-red hover:text-red-400 p-0.5" title="移除联系人">delete</button> -->
     `;
 
     // Attach click listener
     element.addEventListener('click', handleContactClick);
-
-    // Code for delete button (commented out for now)
-    /*
-    const deleteBtn = element.querySelector('.delete-contact-btn');
-    if (deleteBtn) {
-        deleteBtn.addEventListener('click', (event) => {
-            event.stopPropagation(); // Prevent contact click
-            if (confirm(`确定要移除联系人 ${name} (${peerId}) 吗？`)) {
-                // TODO: Implement state.removeContact(peerId)
-                console.log(`Request remove contact: ${peerId}`);
-            }
-        });
-    }
-    */
 
     return element;
 }
@@ -568,19 +634,25 @@ export function displayLocalUserInfo() {
             });
         };
     }
+
+    const localUserId = state.localUserId;
+    // Get local user's name from contacts if they added themselves, otherwise use ID prefix
+    const localName = state.contacts[localUserId]?.name || localUserId.substring(0, 8);
+    const localNameEscaped = escapeHTML(localName);
+    const localAvatarColor = getAvatarColor(localUserId);
+    const localAvatarText = localNameEscaped.charAt(0).toUpperCase();
+
     if(dom.localUsernameDiv) {
-         const user = mockUsers.find(u => u.id === state.localUserId);
-         dom.localUsernameDiv.textContent = user?.name || state.localUserId.substring(0, 8); // Show mock name or truncated ID
-         dom.localUsernameDiv.title = state.localUserId; // Full ID on hover
+         dom.localUsernameDiv.textContent = localNameEscaped;
+         dom.localUsernameDiv.title = localUserId; // Full ID on hover
     }
      if(dom.localUserTagDiv) {
-         const user = mockUsers.find(u => u.id === state.localUserId);
-         dom.localUserTagDiv.textContent = user?.tag || `#${state.localUserId.slice(-4)}`; // Mock tag or last 4 of ID
+         // Use last 4 chars of ID for tag
+         dom.localUserTagDiv.textContent = `#${localUserId.slice(-4)}`;
     }
-     if (dom.userAvatarSmall && dom.localUsernameDiv) {
-         const user = mockUsers.find(u => u.id === state.localUserId) || { name: state.localUserId, avatar: '5865f2' };
-         dom.userAvatarSmall.src = `https://placehold.co/32x32/${user.avatar}/ffffff?text=${escapeHTML(user.name.charAt(0).toUpperCase())}`;
-         dom.userAvatarSmall.alt = `${escapeHTML(user.name)} 头像`;
+     if (dom.userAvatarSmall) { // Check only for userAvatarSmall
+         dom.userAvatarSmall.src = `https://placehold.co/32x32/${localAvatarColor}/ffffff?text=${localAvatarText}`;
+         dom.userAvatarSmall.alt = `${localNameEscaped} 头像`;
      }
      // Update status indicator (assuming always online for self for now)
      if (dom.userStatusIndicator) {
@@ -592,7 +664,8 @@ export function displayLocalUserInfo() {
 
 // --- Other UI Updates ---
 
-// Example: Update user profile section (can be expanded)
+// Example: Update user profile section (REMOVED - Functionality not implemented)
+/*
 export function updateUserProfile(userId, profileData) {
     // Find user elements (e.g., in member list or message headers) and update them
     console.log(`[UI] Received request to update profile for ${userId}`, profileData);
@@ -604,5 +677,5 @@ export function updateUserProfile(userId, profileData) {
          state.saveContacts(); // Save the name change
          renderContactList(); // Re-render to show new name
     }
-     populateMemberList(); // Re-render member list as well
-} 
+}
+*/ 

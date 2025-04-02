@@ -6,6 +6,7 @@ import * as connection from './connection.js';
 import * as fileTransfer from './fileTransfer.js';
 import { TYPING_TIMER_LENGTH } from './constants.js';
 import * as storage from './storage.js'; // Keep storage import if needed elsewhere
+import * as crypto from './crypto.js'; // Import crypto module
 
 // --- Event Handlers ---
 
@@ -125,7 +126,46 @@ async function initializeApp() {
     console.log("[Debug] initializeApp function started.");
     console.log("Initializing P2P Chat Application...");
 
-    // 0. Initialize Database (optional, keep if chat history is needed)
+    // Show loading state using the empty message area
+    if (dom.emptyMessageListDiv) {
+        dom.emptyMessageListDiv.innerHTML = `
+            <div class="animate-pulse text-center">
+                <span class="material-symbols-outlined text-6xl mb-4 text-discord-text-muted">hourglass_top</span>
+                <h3 class="text-lg font-semibold text-discord-text-primary">正在初始化应用...</h3>
+                <p class="text-sm text-discord-text-muted">请稍候</p>
+            </div>
+        `;
+        dom.emptyMessageListDiv.classList.remove('hidden');
+    }
+    ui.updateChatInputVisibility(false); // Disable input during init
+
+    // 0. Initialize Cryptography (Load/Generate Keys) - CRITICAL STEP
+    let cryptoReady = false;
+    try {
+        await crypto.initializeCryptography(); // Call the new initialization function
+        console.log("Cryptography module initialized successfully.");
+        cryptoReady = true;
+    } catch (error) {
+        console.error("Critical Error: Cryptography initialization failed:", error);
+        // Display persistent error message in the empty message area
+        if (dom.emptyMessageListDiv) {
+             dom.emptyMessageListDiv.innerHTML = `
+                <div class="text-center text-discord-red">
+                    <span class="material-symbols-outlined text-6xl mb-4">error</span>
+                    <h3 class="text-lg font-semibold">加密模块初始化失败</h3>
+                    <p class="text-sm">无法加载或生成安全密钥。安全聊天功能将不可用。</p>
+                    <p class="text-xs mt-2">请检查浏览器控制台获取详细信息。</p>
+                </div>
+             `;
+             dom.emptyMessageListDiv.classList.remove('hidden');
+        }
+        // Keep input disabled
+        ui.updateChatInputVisibility(false);
+        // Optionally add a system message too?
+        // ui.addSystemMessage("错误：无法初始化加密模块。", true);
+    }
+
+    // 1. Initialize Database (optional, keep if chat history is needed)
     try {
         await storage.initDB();
         console.log("Database initialized successfully.");
@@ -134,14 +174,14 @@ async function initializeApp() {
         ui.addSystemMessage("错误：无法初始化本地存储。聊天记录可能不会被保存。", true);
     }
 
-    // 1. Load State & Initial UI Setup
+    // 2. Load State & Initial UI Setup (Depends on crypto potentially, but usually loads IDs/contacts)
     state.loadContacts(); // Load contacts from localStorage
     ui.displayLocalUserInfo(); // Display local user ID/name/avatar
     ui.renderContactList(); // Render the initial contact list
     ui.updateEmptyState(); // Show initial empty state
     ui.populateMemberList(); // Initial population of member list (if used)
 
-    // 2. Setup Event Listeners
+    // 3. Setup Event Listeners
     console.log('[Debug] Value of dom.addContactButton before check:', dom.addContactButton);
     // Add Contact Button
     if (dom.addContactButton) {
@@ -177,19 +217,29 @@ async function initializeApp() {
         console.warn("Upload button or file input not found");
     }
 
-    // Member List Toggle (If sidebar is kept)
-    // if (dom.memberListToggleButton) {
-    //     dom.memberListToggleButton.addEventListener('click', ui.toggleMemberList);
-    // } else {
-    //     console.warn("Member list toggle button not found");
-    // }
+    // Member List Toggle (REMOVED - Functionality not currently used)
+    // // if (dom.memberListToggleButton) {
+    // //     dom.memberListToggleButton.addEventListener('click', ui.toggleMemberList);
+    // // } else {
+    // //     console.warn("Member list toggle button not found");
+    // // }
 
     // Note: Contact click listener is now added *within* ui.renderContactList
 
     // 3. Connect WebSocket to Signaling Server
+    // Connect WebSocket regardless of crypto state, maybe server provides other info?
     connection.connectWebSocket();
 
-    console.log("Application Initialization Complete.");
+    // Update UI based on crypto readiness
+    if (cryptoReady) {
+         // Clear loading message and show default empty state
+         ui.updateEmptyState();
+         console.log("Application Initialization Complete.");
+         // Input remains hidden until a contact is selected and connected via ui.updateChatInputVisibility calls elsewhere
+    } else {
+        console.error("Application initialized with crypto module failed. Connection features might be disabled.");
+        // The error message set in the catch block remains visible
+    }
 }
 
 // --- Start Application ---

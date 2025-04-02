@@ -11,43 +11,7 @@
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
     <style>
         /* Keep only non-font/non-lucide specific styles here if any, or move all to style.css */
-
-        /* 自定义滚动条样式 (These seem duplicated in style.css, could be removed later if confirmed) */
-        ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #2f3136;
-            border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #202225;
-            border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #1a1c1e;
-        }
-        /* 正在输入动画 (Also duplicated in style.css) */
-        .typing-dot {
-            animation: typing-bounce 1.2s infinite ease-in-out;
-            background-color: #949ba4; /* discord-text-muted */
-            border-radius: 50%;
-            width: 4px;
-            height: 4px;
-            margin: 0 1px;
-            display: inline-block;
-        }
-        .typing-dot:nth-child(2) {
-            animation-delay: 0.15s;
-        }
-        .typing-dot:nth-child(3) {
-            animation-delay: 0.3s;
-        }
-        @keyframes typing-bounce {
-            0%, 80%, 100% { transform: translateY(0); }
-            40% { transform: translateY(-3px); }
-        }
+        /* Redundant styles removed, kept only the comment placeholder */
     </style>
     <script>
         // Tailwind 配置 (Keep this inline for simplicity for now)
@@ -119,11 +83,14 @@
                     <div class="text-xs text-discord-text-muted local-usertag">#1234</div>
                  </div>
             </div>
+            <!-- REMOVED Static Control Buttons -->
+            <!--
             <div class="flex items-center space-x-1 text-discord-text-muted">
-                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="麦克风静音"><span class="material-symbols-outlined text-base">mic_off</span></button> <!-- Mic Icon -->
-                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="耳机静音"><span class="material-symbols-outlined text-base">headset_off</span></button> <!-- Headphones Icon -->
-                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="用户设置"><span class="material-symbols-outlined text-base">settings</span></button> <!-- Settings Icon -->
+                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="麦克风静音"><span class="material-symbols-outlined text-base">mic_off</span></button>
+                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="耳机静音"><span class="material-symbols-outlined text-base">headset_off</span></button>
+                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="用户设置"><span class="material-symbols-outlined text-base">settings</span></button>
              </div>
+             -->
         </div>
     </div>
 
@@ -133,32 +100,30 @@
         <div class="h-12 px-4 shadow-md flex items-center justify-between border-b border-discord-gray-5 flex-shrink-0">
             <div class="flex items-center text-white space-x-4">
                 <div class="flex items-center">
-                     <!-- 将 # 图标替换为 @ 图标或移除 -->
                      <span class="material-symbols-outlined mr-2 text-xl text-discord-text-muted">alternate_email</span> <!-- @ Icon -->
                     <h2 id="channel-name" class="font-semibold">选择联系人开始聊天</h2>
                 </div>
-                 <!-- Connection status removed -->
                  <div class="flex items-center space-x-2 text-sm">
                      <span class="text-discord-text-muted">您的 ID:</span>
                      <span id="local-user-id" class="text-white font-mono" title="您的用户 ID">加载中...</span>
-                     <!-- Removed remote ID input and connect button -->
                 </div>
             </div>
+            <!-- REMOVED Static Header Buttons (kept member list toggle) -->
             <div class="flex items-center space-x-3 text-discord-text-muted">
-                 <button class="hover:text-white" title="通知设置"><span class="material-symbols-outlined text-xl">notifications</span></button>
-                 <button class="hover:text-white" title="置顶消息"><span class="material-symbols-outlined text-xl">push_pin</span></button>
+                 <!-- <button class="hover:text-white" title="通知设置"><span class="material-symbols-outlined text-xl">notifications</span></button> -->
+                 <!-- <button class="hover:text-white" title="置顶消息"><span class="material-symbols-outlined text-xl">push_pin</span></button> -->
                  <button id="member-list-toggle-button" class="hover:text-white md:hidden" title="成员列表">
                      <span class="material-symbols-outlined text-xl">group</span>
                 </button>
                 <button class="hover:text-white hidden md:inline-block" title="成员列表">
                      <span class="material-symbols-outlined text-xl">group</span>
                 </button>
-                 <div class="relative">
+                 <!-- <div class="relative">
                     <input type="text" placeholder="搜索" class="bg-discord-gray-1 text-sm rounded-discord px-2 py-0.5 w-36 focus:outline-none focus:ring-1 focus:ring-discord-blurple">
                      <span class="material-symbols-outlined absolute right-1.5 top-1/2 transform -translate-y-1/2 text-sm">search</span>
-                 </div>
-                 <button class="hover:text-white" title="收件箱"><span class="material-symbols-outlined text-xl">inbox</span></button>
-                 <button class="hover:text-white" title="帮助"><span class="material-symbols-outlined text-xl">help</span></button>
+                 </div> -->
+                 <!-- <button class="hover:text-white" title="收件箱"><span class="material-symbols-outlined text-xl">inbox</span></button> -->
+                 <!-- <button class="hover:text-white" title="帮助"><span class="material-symbols-outlined text-xl">help</span></button> -->
             </div>
         </div>
 
@@ -192,9 +157,12 @@
                      <span class="material-symbols-outlined text-xl bg-discord-gray-5 p-1 rounded-full">add_circle</span> <!-- Plus Icon in circle -->
                 </button>
                 <input type="text" id="message-input" placeholder="发送消息" class="flex-1 bg-transparent py-2.5 text-sm text-discord-text-primary placeholder-discord-text-muted focus:outline-none"> <!-- Placeholder updated -->
-                 <button class="text-discord-text-muted hover:text-white ml-2" title="赠送礼物"><span class="material-symbols-outlined text-xl">card_giftcard</span></button> <!-- Gift Icon -->
-                 <button class="text-discord-text-muted hover:text-white ml-2" title="GIF"><span class="material-symbols-outlined text-xl">gif_box</span></button> <!-- GIF Icon -->
-                 <button class="text-discord-text-muted hover:text-white ml-2" title="表情"><span class="material-symbols-outlined text-xl">mood</span></button> <!-- Smile Icon -->
+                 <!-- REMOVED Static Input Buttons -->
+                 <!--
+                 <button class="text-discord-text-muted hover:text-white ml-2" title="赠送礼物"><span class="material-symbols-outlined text-xl">card_giftcard</span></button>
+                 <button class="text-discord-text-muted hover:text-white ml-2" title="GIF"><span class="material-symbols-outlined text-xl">gif_box</span></button>
+                 <button class="text-discord-text-muted hover:text-white ml-2" title="表情"><span class="material-symbols-outlined text-xl">mood</span></button>
+                 -->
              </div>
         </div>
     </div>
@@ -217,13 +185,13 @@
     </div>
 
     <!-- Scripts -->
-    <!-- Load Lucide icons library -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Load Lucide icons library (REMOVED) -->
+    <!-- <script src="https://unpkg.com/lucide@latest"></script> -->
 
     <!-- Main application script (module) -->
     <script type="module" src="main.js"></script>
 
-    <!-- Initialize Lucide icons (optional initial call, might be handled by module now) -->
+    <!-- Initialize Lucide icons (REMOVED) -->
     <!-- <script>lucide.createIcons();</script> -->
 
 </body>

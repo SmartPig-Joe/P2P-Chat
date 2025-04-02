@@ -2,28 +2,68 @@
 import { ECDH_PARAMS, AES_PARAMS, KEY_USAGE_ECDH, KEY_USAGE_AES } from './constants.js';
 import * as state from './state.js';
 import { addSystemMessage } from './ui.js'; // Need ui functions for error/status messages
+import { loadKeyPair, saveKeyPair } from './storage.js'; // Import storage functions
+import { generateEncryptionKeyPair } from './utils.js'; // Import key generation utility
 
 // Function to reset connection state will be called from connection.js or main.js
 // We don't import resetConnection directly here to avoid circular dependency
 
-// Generate ECDH key pair
-export async function generateAndStoreKeyPair() {
+// --- NEW: Initialization Function ---
+/**
+ * Initializes the cryptographic module by loading an existing key pair
+ * or generating a new one if none is found. Stores the key pair in the state.
+ * Throws an error if initialization fails critically (cannot load or generate keys).
+ */
+export async function initializeCryptography() {
+    console.log("Initializing cryptography...");
+    let keyPair = null;
     try {
-        const keyPair = await window.crypto.subtle.generateKey(
-            ECDH_PARAMS,
-            true, // extractable
-            KEY_USAGE_ECDH
-        );
-        console.log("ECDH key pair generated:", keyPair);
-        state.setLocalKeyPair(keyPair);
+        // 1. Try loading existing key pair
+        keyPair = await loadKeyPair();
+        if (keyPair) {
+            console.log("Existing key pair loaded successfully.");
+        } else {
+            // 2. If no key pair loaded, generate a new one
+            console.log("No existing key pair found. Generating a new one...");
+            keyPair = await generateEncryptionKeyPair(); // Use the function from utils.js
+            if (keyPair) {
+                console.log("New key pair generated.");
+                // 3. Save the newly generated key pair
+                const saved = await saveKeyPair(keyPair);
+                if (saved) {
+                    console.log("New key pair saved successfully.");
+                } else {
+                    console.warn("Failed to save the newly generated key pair. Proceeding without saving.");
+                    // Decide if this is a critical failure or just a warning
+                }
+            } else {
+                 // This case should ideally be handled within generateEncryptionKeyPair by throwing
+                 console.error("Key pair generation returned null/undefined.");
+                 throw new Error("Key pair generation failed.");
+            }
+        }
+
+        // 4. Store the loaded or generated key pair in the state
+        if (keyPair) {
+            state.setLocalKeyPair(keyPair);
+            console.log("Local key pair set in application state.");
+        } else {
+             // This should not happen if loading/generation logic is correct and throws errors
+             throw new Error("Failed to obtain a valid key pair during initialization.");
+        }
+
     } catch (error) {
-        console.error("Error generating key pair:", error);
-        addSystemMessage("生成密钥对失败。", true);
-        // We need to signal the connection logic to reset.
-        // This might require throwing an error or returning a failure status.
-        throw new Error("Key generation failed"); 
+        console.error("Cryptography initialization failed:", error);
+        addSystemMessage("错误：无法初始化加密模块。安全连接将不可用。", true);
+        // Re-throw the error to signal failure to the calling function (e.g., initializeApp)
+        throw error;
     }
 }
+
+// --- Key Management ---
+
+// Generate ECDH key pair (REMOVED - Functionality covered by initializeCryptography)
+// export async function generateAndStoreKeyPair() { ... }
 
 // Export public key in JWK format
 export async function exportPublicKey(key) {
@@ -86,67 +126,99 @@ export async function deriveSharedKey(localPrivateKey, remotePublicKey) {
     }
 }
 
-// Encrypt data using the shared AES-GCM key
-export async function encryptMessage(key, data) {
-    if (!key) throw new Error("Encryption key is not available.");
+// --- Encryption/Decryption --- (Assuming these use state.sharedKey implicitly or explicitly passed)
+
+// Encrypt data using the shared AES-GCM key (Pass sharedKey explicitly)
+export async function encryptMessage(text) { // Changed signature, assumes sharedKey is in state
+    if (!state.sharedKey) throw new Error("Encryption key (sharedKey) is not available in state.");
+    if (!text) throw new Error("Cannot encrypt empty message."); // Added check
+
     try {
         const iv = window.crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV is recommended for GCM
-        // Prepare the data (ensure it's stringified if it's an object)
-        const dataToEncrypt = typeof data === 'string' ? data : JSON.stringify(data);
-        const encodedData = new TextEncoder().encode(dataToEncrypt);
+        const encodedData = new TextEncoder().encode(text); // Directly encode the text string
 
         const ciphertext = await window.crypto.subtle.encrypt(
             {
                 name: AES_PARAMS.name,
                 iv: iv
             },
-            key,           // The AES-GCM key
-            encodedData    // Data to encrypt as ArrayBuffer
+            state.sharedKey, // Use the key from state
+            encodedData
         );
 
-        // Return IV and ciphertext, often base64 encoded for transmission, but raw buffers are fine for DataChannel
+        // Return IV and ciphertext as arrays for JSON serialization
         return {
-            iv: Array.from(iv), // Convert IV to a regular array for JSON serialization
-            ciphertext: Array.from(new Uint8Array(ciphertext)) // Convert ciphertext to a regular array
+            iv: Array.from(iv),
+            ciphertext: Array.from(new Uint8Array(ciphertext))
         };
     } catch (error) {
         console.error("Encryption error:", error);
-        throw error; // Re-throw to be handled by the caller
+        throw error; // Re-throw
     }
 }
 
-// Decrypt data using the shared AES-GCM key
-export async function decryptMessage(key, encryptedData) {
-    if (!key) throw new Error("Decryption key is not available.");
-    if (!encryptedData || !encryptedData.iv || !encryptedData.ciphertext) {
+// Decrypt data using the shared AES-GCM key (Pass sharedKey explicitly)
+export async function decryptMessage(encryptedPayload) { // Changed signature, assumes sharedKey is in state
+    if (!state.sharedKey) throw new Error("Decryption key (sharedKey) is not available in state.");
+    if (!encryptedPayload || !encryptedPayload.iv || !encryptedPayload.ciphertext) {
         throw new Error("Invalid encrypted data format for decryption.");
     }
     try {
-        const iv = new Uint8Array(encryptedData.iv); // Convert array back to Uint8Array
-        const ciphertext = new Uint8Array(encryptedData.ciphertext); // Convert array back to Uint8Array
+        const iv = new Uint8Array(encryptedPayload.iv);
+        const ciphertext = new Uint8Array(encryptedPayload.ciphertext);
 
         const decrypted = await window.crypto.subtle.decrypt(
             {
                 name: AES_PARAMS.name,
                 iv: iv
             },
-            key,           // The AES-GCM key
-            ciphertext     // The ArrayBuffer containing the ciphertext
+            state.sharedKey, // Use the key from state
+            ciphertext
         );
 
-        // Decode the decrypted ArrayBuffer back to a string
         const decodedData = new TextDecoder().decode(decrypted);
+        return decodedData; // Return the decrypted string directly
 
-        // Try to parse if it looks like JSON, otherwise return the raw string
-        try {
-            return JSON.parse(decodedData);
-        } catch (e) {
-            console.warn("Decrypted data is not valid JSON, returning as string.");
-            return decodedData; // Return as plain text if not JSON
-        }
     } catch (error) {
         console.error("Decryption error:", error);
-        // More specific error handling could be done here (e.g., check for AuthenticationError)
-        throw new Error("Decryption failed. Message may be corrupted or key mismatch."); // Re-throw
+        throw new Error("Decryption failed. Message may be corrupted or key mismatch.");
+    }
+}
+
+// --- Key Handling --- (New function to handle incoming public key)
+/**
+ * Imports the peer's public key and derives the shared secret.
+ * Stores the peer's public key and the derived shared key in the state.
+ * @param {JsonWebKey} peerPublicKeyJwk The peer's public key in JWK format.
+ */
+export async function handlePublicKey(peerPublicKeyJwk) {
+    if (!state.localKeyPair || !state.localKeyPair.privateKey) {
+        console.error("Cannot handle peer public key: Local key pair not available.");
+        // Potentially reset connection or show error?
+        return;
+    }
+    console.log("Handling received public key...");
+    try {
+        const remotePublicKey = await importPublicKey(peerPublicKeyJwk);
+        if (!remotePublicKey) {
+            throw new Error("Failed to import peer public key.");
+        }
+        state.setPeerPublicKey(remotePublicKey); // Store imported peer public key
+
+        // Derive the shared key
+        const sharedKey = await deriveSharedKey(state.localKeyPair.privateKey, remotePublicKey);
+        if (!sharedKey) {
+             throw new Error("Failed to derive shared key.");
+        }
+        // Shared key is already stored in state by deriveSharedKey
+        console.log("Shared key derived and stored successfully.");
+        // Potentially trigger UI update or other logic now that secure channel is ready
+         addSystemMessage("端到端加密已建立。", false);
+
+    } catch (error) {
+        console.error("Error handling peer public key:", error);
+        addSystemMessage("处理对方公钥并建立安全连接时出错。", true);
+        // Consider resetting the connection here if key exchange fails
+        // resetConnection(); // Needs access to resetConnection
     }
 } 

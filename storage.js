@@ -6,6 +6,8 @@ const STORE_MESSAGES = 'messages';
 
 let db = null; // Variable to hold the database instance
 
+const KEYPAIR_STORAGE_KEY = 'user_crypto_keypair';
+
 /**
  * Initializes the IndexedDB database.
  * Creates the object store if it doesn't exist.
@@ -196,4 +198,72 @@ export function getAllPeerIds() {
             reject(`Transaction error: ${event.target.error}`);
         };
     });
+}
+
+export async function saveKeyPair(keyPair) {
+  try {
+    // 检查 keyPair 是否有效
+    if (!keyPair || !keyPair.publicKey || !keyPair.privateKey) {
+      console.error("保存失败：无效的密钥对对象");
+      return false;
+    }
+    // 导出公钥和私钥为 JWK 格式
+    const publicKeyJwk = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
+    const privateKeyJwk = await window.crypto.subtle.exportKey('jwk', keyPair.privateKey); // 确保私钥是可导出的
+
+    // 存储到 localStorage
+    localStorage.setItem(KEYPAIR_STORAGE_KEY, JSON.stringify({
+      publicKey: publicKeyJwk,
+      privateKey: privateKeyJwk
+    }));
+    console.log("密钥对已保存到 localStorage");
+    return true;
+  } catch (error) {
+    console.error("保存密钥对时出错:", error); // **添加错误日志**
+    return false;
+  }
+}
+
+export async function loadKeyPair() {
+  try {
+    const storedKeyPair = localStorage.getItem(KEYPAIR_STORAGE_KEY);
+    if (!storedKeyPair) {
+      console.log("未找到存储的密钥对");
+      return null;
+    }
+
+    const keyPairJwk = JSON.parse(storedKeyPair);
+
+    // 检查 JWK 数据是否存在
+    if (!keyPairJwk || !keyPairJwk.publicKey || !keyPairJwk.privateKey) {
+        console.error("加载失败：存储的 JWK 数据无效");
+        localStorage.removeItem(KEYPAIR_STORAGE_KEY); // 清理无效数据
+        return null;
+    }
+
+    // 导入公钥和私钥
+    // **仔细检查这里的参数是否与生成/导出时一致**
+    const publicKey = await window.crypto.subtle.importKey(
+      'jwk',
+      keyPairJwk.publicKey,
+      { name: 'ECDH', namedCurve: 'P-256' }, // **确保算法和曲线匹配**
+      true, // 可导出性
+      [] // 公钥用途通常为空
+    );
+    const privateKey = await window.crypto.subtle.importKey(
+      'jwk',
+      keyPairJwk.privateKey,
+      { name: 'ECDH', namedCurve: 'P-256' }, // **确保算法和曲线匹配**
+      true, // 可导出性
+      ['deriveKey', 'deriveBits'] // **确保用途与实际使用匹配**
+    );
+
+    console.log("密钥对已从 localStorage 加载");
+    return { publicKey, privateKey };
+  } catch (error) {
+    console.error("加载密钥对时出错:", error); // **添加错误日志**
+    // 加载失败时可能需要清除无效的存储项
+    localStorage.removeItem(KEYPAIR_STORAGE_KEY);
+    return null;
+  }
 } 

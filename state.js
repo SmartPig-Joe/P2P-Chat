@@ -159,7 +159,6 @@ export function resetConnectionState() {
     setRemoteUserId(null);
     setIsConnected(false);
     setIsConnecting(false);
-    setLocalKeyPair(null);
     setSharedKey(null);
     setPeerPublicKey(null);
     clearTimeout(typingTimeout);
@@ -175,4 +174,6 @@ export function resetConnectionState() {
     }
 
     return previousRemoteUserId;
-} 
+}
+
+// ... 其他状态管理逻辑 ... 

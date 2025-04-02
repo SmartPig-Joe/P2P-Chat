@@ -447,7 +447,7 @@ async function setupDataChannelEvents(dc) {
                                  isEncrypted: true
                              };
                              ui.addP2PMessageToList(msgData);
-                             storage.addMessageToHistory(currentRemoteId, msgData);
+                             storage.addMessage(msgData);
                         }).catch(err => {
                              console.error("Decryption failed:", err);
                              ui.addSystemMessage("收到无法解密的消息。", true);
@@ -459,7 +459,7 @@ async function setupDataChannelEvents(dc) {
                                  isEncrypted: false
                              };
                              ui.addP2PMessageToList(msgData);
-                             storage.addMessageToHistory(currentRemoteId, msgData);
+                             storage.addMessage(msgData);
                         });
                         break;
                     case 'typing':
@@ -616,10 +616,15 @@ export async function connectToPeer(targetPeerId) {
     ui.updateChatInputVisibility();
 
     try {
-        // Generate new key pair for this connection attempt
-        console.log("Generating new key pair for this connection...");
-        await crypto.generateAndStoreKeyPair();
-        console.log("New key pair generated and stored.");
+        // Ensure local key pair is ready before proceeding
+        if (!state.localKeyPair) {
+            console.error("Cannot initiate connection: Local key pair not initialized.");
+            ui.addSystemMessage("错误：本地加密密钥未就绪。无法发起连接。", true);
+            // Optionally try to initialize again?
+            // await crypto.initializeCryptography(); // This might be too complex here
+            resetConnection(); // Reset state as we cannot proceed
+            return;
+        }
 
         const pc = createPeerConnection();
         if (!pc) throw new Error("PeerConnection creation failed");
@@ -648,12 +653,12 @@ export async function connectToPeer(targetPeerId) {
     } catch (error) {
         console.error(`Error initiating connection to ${targetPeerId}:`, error);
         const failedPeer = targetPeerId;
-        // Handle potential error during key generation as well
-        if (error.message.includes("Key generation failed")) {
-            ui.addSystemMessage(`生成加密密钥失败，无法连接到 ${state.contacts[failedPeer]?.name || failedPeer}。`, true);
-        } else {
+        // REMOVED: Specific check for key generation failure is less relevant now
+        // if (error.message.includes("Key generation failed")) {
+        //     ui.addSystemMessage(`生成加密密钥失败，无法连接到 ${state.contacts[failedPeer]?.name || failedPeer}。`, true);
+        // } else {
             ui.addSystemMessage(`发起与 ${state.contacts[failedPeer]?.name || failedPeer} 的连接失败。`, true);
-        }
+        // }
         resetConnection();
     }
 }
@@ -729,7 +734,7 @@ export function sendChatMessage(text) {
                  isEncrypted: true
              };
              ui.addP2PMessageToList(msgData);
-             storage.addMessageToHistory(state.remoteUserId, msgData);
+             storage.addMessage(msgData);
 
          } catch (e) {
              console.error("Error sending chat message:", e);

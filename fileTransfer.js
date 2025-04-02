@@ -44,7 +44,6 @@ export function handleFileSelect(event) {
         state.dataChannel.send(JSON.stringify(messageToSend));
         console.log("Sent file-info:", fileInfo);
         ui.addFileMessageToList(fileInfo, true, null, 0);
-        ui.addContactToList(recipientPeerId);
     } catch (e) {
         console.error("[Debug] handleFileSelect: Failed to send file-info:", e);
         ui.addSystemMessage(`发送文件 ${escapeHTML(file.name)} 的信息失败。`, true);
