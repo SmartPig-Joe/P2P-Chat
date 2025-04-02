@@ -1,36 +1,31 @@
-// Crypto Constants
-export const ECDH_PARAMS = { name: 'ECDH', namedCurve: 'P-256' };
-export const AES_PARAMS = { name: 'AES-GCM', length: 256 };
-export const KEY_USAGE_ECDH = ['deriveKey', 'deriveBits'];
-export const KEY_USAGE_AES = ['encrypt', 'decrypt'];
+// crypto.js
+import { ECDH_PARAMS, AES_PARAMS, KEY_USAGE_ECDH, KEY_USAGE_AES } from './constants.js';
+import * as state from './state.js';
+import { addSystemMessage, updateConnectionStatus } from './ui.js'; // Need ui functions for error/status messages
 
-// --- Crypto Functions ---
+// Function to reset connection state will be called from connection.js or main.js
+// We don't import resetConnection directly here to avoid circular dependency
 
-/**
- * Generates a new ECDH key pair.
- * @returns {Promise<CryptoKeyPair>}
- */
-export async function generateKeyPair() {
+// Generate ECDH key pair
+export async function generateAndStoreKeyPair() {
     try {
         const keyPair = await window.crypto.subtle.generateKey(
             ECDH_PARAMS,
-            true,
+            true, // extractable
             KEY_USAGE_ECDH
         );
         console.log("ECDH key pair generated:", keyPair);
-        return keyPair;
+        state.setLocalKeyPair(keyPair);
     } catch (error) {
         console.error("Error generating key pair:", error);
-        // Consider throwing the error or returning null/undefined based on desired error handling
-        throw new Error("Failed to generate key pair.");
+        addSystemMessage("生成密钥对失败。", true);
+        // We need to signal the connection logic to reset.
+        // This might require throwing an error or returning a failure status.
+        throw new Error("Key generation failed"); 
     }
 }
 
-/**
- * Exports a public key to JWK format.
- * @param {CryptoKey} key - The public CryptoKey to export.
- * @returns {Promise<JsonWebKey | null>}
- */
+// Export public key in JWK format
 export async function exportPublicKey(key) {
     if (!key) return null;
     try {
@@ -45,11 +40,7 @@ export async function exportPublicKey(key) {
     }
 }
 
-/**
- * Imports a public key from JWK format.
- * @param {JsonWebKey} jwk - The JWK representation of the public key.
- * @returns {Promise<CryptoKey | null>}
- */
+// Import peer's public key from JWK format
 export async function importPublicKey(jwk) {
     if (!jwk) return null;
     try {
@@ -57,8 +48,8 @@ export async function importPublicKey(jwk) {
             "jwk",
             jwk,
             ECDH_PARAMS,
-            true, // extractable parameter should be true for ECDH public keys
-            [] // public keys have empty key usage
+            true, // extractable (though not strictly necessary for ECDH public key)
+            []    // no key usage required for public key import in ECDH
         );
         console.log("Peer public key imported successfully.");
         return importedKey;
@@ -68,90 +59,94 @@ export async function importPublicKey(jwk) {
     }
 }
 
-/**
- * Derives a shared AES-GCM key using ECDH.
- * @param {CryptoKey} localPrivateKey - The local private key.
- * @param {CryptoKey} peerPublicKey - The peer's public key.
- * @returns {Promise<CryptoKey | null>}
- */
-export async function deriveSharedKey(localPrivateKey, peerPublicKey) {
-    if (!localPrivateKey || !peerPublicKey) return null;
+// Derive shared AES key using local private key and peer public key
+export async function deriveSharedKey(localPrivateKey, remotePublicKey) {
+    if (!localPrivateKey || !remotePublicKey) {
+        console.error("Cannot derive shared key: Missing local private key or peer public key.");
+        return null;
+    }
     try {
         const derived = await window.crypto.subtle.deriveKey(
             {
                 name: ECDH_PARAMS.name,
-                public: peerPublicKey
+                public: remotePublicKey // Peer's public key
             },
-            localPrivateKey,
-            AES_PARAMS,
-            true, // Shared key should be extractable if needed, true for general use
-            KEY_USAGE_AES
+            localPrivateKey,       // Your private key
+            AES_PARAMS,            // Desired algorithm for the derived key (AES-GCM)
+            true,                  // Extractable (usually true for symmetric keys)
+            KEY_USAGE_AES          // Key usages for the derived AES key
         );
         console.log("Shared AES key derived:", derived);
+        state.setSharedKey(derived); // Store the derived key in state
         return derived;
     } catch (error) {
         console.error("Error deriving shared key:", error);
+        addSystemMessage("共享密钥派生失败！", true);
         return null;
     }
 }
 
-/**
- * Encrypts data using AES-GCM.
- * @param {CryptoKey} key - The AES-GCM key.
- * @param {any} data - The data to encrypt (will be JSON.stringified).
- * @returns {Promise<{iv: number[], ciphertext: number[]}>}
- */
+// Encrypt data using the shared AES-GCM key
 export async function encryptMessage(key, data) {
     if (!key) throw new Error("Encryption key is not available.");
     try {
-        const iv = window.crypto.getRandomValues(new Uint8Array(12)); // 12 bytes IV for AES-GCM
-        const encodedData = new TextEncoder().encode(JSON.stringify(data));
+        const iv = window.crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV is recommended for GCM
+        // Prepare the data (ensure it's stringified if it's an object)
+        const dataToEncrypt = typeof data === 'string' ? data : JSON.stringify(data);
+        const encodedData = new TextEncoder().encode(dataToEncrypt);
 
         const ciphertext = await window.crypto.subtle.encrypt(
-            { name: AES_PARAMS.name, iv: iv },
-            key,
-            encodedData
+            {
+                name: AES_PARAMS.name,
+                iv: iv
+            },
+            key,           // The AES-GCM key
+            encodedData    // Data to encrypt as ArrayBuffer
         );
 
-        // Convert IV and ciphertext to arrays of numbers for JSON serialization
+        // Return IV and ciphertext, often base64 encoded for transmission, but raw buffers are fine for DataChannel
         return {
-            iv: Array.from(iv),
-            ciphertext: Array.from(new Uint8Array(ciphertext))
+            iv: Array.from(iv), // Convert IV to a regular array for JSON serialization
+            ciphertext: Array.from(new Uint8Array(ciphertext)) // Convert ciphertext to a regular array
         };
     } catch (error) {
         console.error("Encryption error:", error);
-        throw error; // Re-throw the error for the caller to handle
+        throw error; // Re-throw to be handled by the caller
     }
 }
 
-/**
- * Decrypts data using AES-GCM.
- * @param {CryptoKey} key - The AES-GCM key.
- * @param {{iv: number[], ciphertext: number[]}} encryptedData - The encrypted data object.
- * @returns {Promise<any>}
- */
+// Decrypt data using the shared AES-GCM key
 export async function decryptMessage(key, encryptedData) {
     if (!key) throw new Error("Decryption key is not available.");
     if (!encryptedData || !encryptedData.iv || !encryptedData.ciphertext) {
-        throw new Error("Invalid encrypted data format.");
+        throw new Error("Invalid encrypted data format for decryption.");
     }
-
     try {
-        // Convert arrays of numbers back to Uint8Array
-        const iv = new Uint8Array(encryptedData.iv);
-        const ciphertext = new Uint8Array(encryptedData.ciphertext);
+        const iv = new Uint8Array(encryptedData.iv); // Convert array back to Uint8Array
+        const ciphertext = new Uint8Array(encryptedData.ciphertext); // Convert array back to Uint8Array
 
         const decrypted = await window.crypto.subtle.decrypt(
-            { name: AES_PARAMS.name, iv: iv },
-            key,
-            ciphertext
+            {
+                name: AES_PARAMS.name,
+                iv: iv
+            },
+            key,           // The AES-GCM key
+            ciphertext     // The ArrayBuffer containing the ciphertext
         );
 
+        // Decode the decrypted ArrayBuffer back to a string
         const decodedData = new TextDecoder().decode(decrypted);
-        return JSON.parse(decodedData);
+
+        // Try to parse if it looks like JSON, otherwise return the raw string
+        try {
+            return JSON.parse(decodedData);
+        } catch (e) {
+            console.warn("Decrypted data is not valid JSON, returning as string.");
+            return decodedData; // Return as plain text if not JSON
+        }
     } catch (error) {
         console.error("Decryption error:", error);
-        // Provide a more specific error message if possible
-        throw new Error("Decryption failed. Key might be incorrect or data corrupted.");
+        // More specific error handling could be done here (e.g., check for AuthenticationError)
+        throw new Error("Decryption failed. Message may be corrupted or key mismatch."); // Re-throw
     }
 } 

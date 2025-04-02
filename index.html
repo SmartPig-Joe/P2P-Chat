@@ -248,23 +248,30 @@
     </div>
 
     <!-- 成员列表 (右侧边栏) -->
-    <div id="member-list-sidebar" class="w-60 bg-discord-gray-2 p-3 space-y-4 border-l border-discord-gray-5 overflow-y-auto hidden md:block flex-shrink-0">
-         <!-- User list remains text/images -->
-         <div>
-            <h3 class="text-xs font-semibold uppercase text-discord-text-muted mb-2">在线 - <span id="online-count">0</span></h3>
-            <div class="space-y-2">
-                <!-- Online users loaded here -->
+    <div id="member-list-sidebar" class="w-60 bg-discord-gray-2 border-l border-discord-gray-5 flex-col flex-shrink-0 hidden md:flex">
+        <!-- Sidebar content goes here -->
+        <div class="flex-1 p-3 space-y-4 overflow-y-auto">
+            <!-- Online members -->
+            <div>
+                <h3 class="text-xs font-semibold uppercase text-discord-text-muted mb-2">在线 - <span id="online-count">1</span></h3>
+                <div class="space-y-2" id="online-list-container"></div>
             </div>
-        </div>
-         <div>
-            <h3 class="text-xs font-semibold uppercase text-discord-text-muted mb-2">离线 - <span id="offline-count">0</span></h3>
-             <div class="space-y-2">
-                <!-- Offline users loaded here -->
+            <!-- Offline members -->
+            <div>
+                 <h3 class="text-xs font-semibold uppercase text-discord-text-muted mb-2">离线 - <span id="offline-count">4</span></h3>
+                 <div class="space-y-2" id="offline-list-container"></div>
             </div>
         </div>
     </div>
 
-    <!-- Link external JavaScript -->
+    <!-- Include Lucide icons - Place this before your main script -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+      lucide.createIcons();
+    </script>
+
+    <!-- Load the main application script as a module -->
     <script type="module" src="main.js"></script>
+
 </body>
 </html>
