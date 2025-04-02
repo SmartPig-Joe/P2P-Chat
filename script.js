@@ -27,7 +27,7 @@ let localUserId = `user-${Date.now().toString().slice(-6)}`;
 let remoteUserId = null;
 let isConnected = false;
 let isConnecting = false;
-const signalingServerUrl = 'wss://signal.smartpig.top/ws';
+const signalingServerUrl = 'ws://signal.smartpig.top:8080/ws';
 // ------------------------------------
 
 const peerConnectionConfig = {
