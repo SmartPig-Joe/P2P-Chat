@@ -141,7 +141,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 
 			log.Printf("Forwarding %s from %s to %s", msg.Type, registeredUserID, payload.TargetUserID)
-			s.sendMessageToClient(ctx, payload.TargetUserID, modifiedData)
+			s.sendMessageToClient(ctx, payload.TargetUserID, registeredUserID, modifiedData)
 
         case "register":
              // Should ideally only happen once, log if received again
@@ -194,22 +194,65 @@ func (s *Server) registerClient(ctx context.Context, conn *websocket.Conn, userI
 }
 
 // sendMessageToClient sends a message to a specific client identified by userId
-func (s *Server) sendMessageToClient(ctx context.Context, userId string, msg []byte) {
-	if connPtr, ok := s.clients.Load(userId); ok {
+func (s *Server) sendMessageToClient(ctx context.Context, targetUserId string, originalSenderId string, msgData []byte) {
+	if connPtr, ok := s.clients.Load(targetUserId); ok {
 		conn := connPtr.(*websocket.Conn) // Type assertion
-		err := conn.Write(ctx, websocket.MessageText, msg)
+		err := conn.Write(ctx, websocket.MessageText, msgData)
 		if err != nil {
-			log.Printf("Error sending message to %s: %v", userId, err)
+			log.Printf("Error sending message to %s: %v", targetUserId, err)
 			// Optionally remove the client if write fails repeatedly
-			// s.clients.Delete(userId)
+			// s.clients.Delete(targetUserId)
 			// conn.Close(...)
+
+			// Notify sender about the failure to send? (Optional)
+            // s.sendErrorToClient(ctx, originalSenderId, targetUserId, "Failed to deliver message")
+
 		} else {
-            log.Printf("Successfully sent message to %s", userId)
+            log.Printf("Successfully sent message to %s", targetUserId)
         }
 	} else {
-		log.Printf("Failed to send message: Client %s not found.", userId)
-		// Optionally notify the sender that the target is offline
+		log.Printf("Failed to send message: Client %s not found.", targetUserId)
+		// *** Send error message back to the original sender ***
+		s.sendErrorToClient(ctx, originalSenderId, targetUserId, "User not found or offline") // Call helper function
 	}
+}
+
+// sendErrorToClient sends a structured error message to a specific client.
+func (s *Server) sendErrorToClient(ctx context.Context, recipientUserId string, relatedUserId string, errorMessage string) {
+    errorPayload := map[string]string{
+        "message":    errorMessage,
+        "targetUser": relatedUserId, // Include the user it failed to reach
+    }
+    payloadBytes, err := json.Marshal(errorPayload)
+    if err != nil {
+        log.Printf("Error marshalling error payload for %s: %v", recipientUserId, err)
+        return
+    }
+
+    errorMsg := Message{
+        Type:    "error", // Use 'error' type as expected by client
+        Payload: json.RawMessage(payloadBytes),
+		// No 'From' needed for server-generated errors, or set to "server"?
+    }
+    msgBytes, err := json.Marshal(errorMsg)
+     if err != nil {
+        log.Printf("Error marshalling error message for %s: %v", recipientUserId, err)
+        return
+    }
+
+
+    if connPtr, ok := s.clients.Load(recipientUserId); ok {
+        conn := connPtr.(*websocket.Conn)
+        err := conn.Write(ctx, websocket.MessageText, msgBytes)
+        if err != nil {
+            log.Printf("Error sending error message to %s: %v", recipientUserId, err)
+        } else {
+             log.Printf("Sent error '%s' to %s (related to %s)", errorMessage, recipientUserId, relatedUserId)
+        }
+    } else {
+         // If the original sender is also gone, just log it.
+         log.Printf("Could not send error back to original sender %s as they are no longer connected.", recipientUserId)
+    }
 }
 
 // Helper for logging errors before returning them
