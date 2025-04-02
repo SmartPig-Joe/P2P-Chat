@@ -7,8 +7,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Link external CSS -->
     <link rel="stylesheet" href="style.css">
-    <!-- Add Google Fonts link for Material Symbols -->
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <!-- 移除外部字体链接 -->
+    <!-- <link rel="stylesheet" href="https://fonts.loli.net/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" /> -->
     <style>
         /* Keep only non-font/non-lucide specific styles here if any, or move all to style.css */
         /* Redundant styles removed, kept only the comment placeholder */
@@ -30,6 +30,7 @@
                         'discord-text-link': '#00a8fc',
                         'discord-green': '#23a55a',
                         'discord-red': '#f23f43',
+                        'discord-yellow': '#f9a839', // 添加黄色
                     },
                     fontFamily: {
                         sans: ['Inter', 'sans-serif'],
@@ -71,24 +72,31 @@
             -->
         </div>
         <!-- 用户信息与控制 -->
-        <div class="h-14 bg-discord-gray-1/80 p-2 flex items-center justify-between flex-shrink-0">
-             <!-- User avatar remains image -->
+        <div class="h-14 bg-discord-gray-1/80 p-2 flex items-center justify-between flex-shrink-0 border-t border-discord-gray-5">
+            <!-- User Info Section -->
             <div class="flex items-center space-x-2 cursor-pointer group">
                  <div class="relative">
+                    <!-- Placeholder Avatar -->
                     <img src="https://placehold.co/32x32/5865f2/ffffff?text=U" alt="用户头像" class="rounded-full user-avatar-small" onerror="this.src='https://placehold.co/32x32/2c2f33/ffffff?text=Err'">
+                    <!-- Status Indicator (example: online) -->
                     <span class="absolute bottom-0 right-0 block h-3 w-3 bg-discord-green border-2 border-discord-gray-1/80 rounded-full user-status-indicator"></span>
                  </div>
-                <div>
-                    <div class="text-sm font-medium text-white group-hover:underline local-username">用户名</div>
-                    <div class="text-xs text-discord-text-muted local-usertag">#1234</div>
+                <div class="flex flex-col">
+                    <!-- Local User ID Display -->
+                    <div class="flex items-center">
+                        <span id="local-user-id-display" class="text-sm font-medium text-white group-hover:underline" title="点击复制您的ID">加载中...</span>
+                        <button id="copy-local-id-button" class="ml-1 p-0.5 rounded text-discord-text-muted hover:text-white hover:bg-discord-gray-4" title="复制 ID">
+                            <span class="material-symbols-outlined text-xs">content_copy</span>
+                        </button>
+                    </div>
+                    <!-- Optional: Status Text -->
+                    <div class="text-xs text-discord-text-muted">在线</div>
                  </div>
             </div>
-            <!-- REMOVED Static Control Buttons -->
+            <!-- Settings/Controls (Optional) -->
             <!--
             <div class="flex items-center space-x-1 text-discord-text-muted">
-                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="麦克风静音"><span class="material-symbols-outlined text-base">mic_off</span></button>
-                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="耳机静音"><span class="material-symbols-outlined text-base">headset_off</span></button>
-                <button class="hover:bg-discord-gray-4 p-1 rounded-discord" title="用户设置"><span class="material-symbols-outlined text-base">settings</span></button>
+                <button class="hover:bg-discord-gray-4 p-1 rounded" title="用户设置"><span class="material-symbols-outlined text-base">settings</span></button>
              </div>
              -->
         </div>
@@ -98,37 +106,27 @@
     <div class="flex-1 flex flex-col bg-discord-gray-3 overflow-hidden">
         <!-- 聊天区顶部栏 -->
         <div class="h-12 px-4 shadow-md flex items-center justify-between border-b border-discord-gray-5 flex-shrink-0">
-            <div class="flex items-center text-white space-x-4">
-                <div class="flex items-center">
-                     <span class="material-symbols-outlined mr-2 text-xl text-discord-text-muted">alternate_email</span> <!-- @ Icon -->
-                    <h2 id="channel-name" class="font-semibold">选择联系人开始聊天</h2>
-                </div>
-                 <div class="flex items-center space-x-2 text-sm">
-                     <span class="text-discord-text-muted">您的 ID:</span>
-                     <span id="local-user-id" class="text-white font-mono" title="您的用户 ID">加载中...</span>
-                </div>
+            <!-- Channel/Peer Info -->
+            <div class="flex items-center space-x-2 min-w-0">
+                 <span class="material-symbols-outlined text-xl text-discord-text-muted flex-shrink-0">alternate_email</span> <!-- @ Icon -->
+                 <div class="flex flex-col min-w-0">
+                    <h2 id="chat-header-name" class="font-semibold text-white truncate">选择对话</h2>
+                    <div id="chat-header-status" class="text-xs text-discord-text-muted truncate">从左侧列表选择一个联系人开始聊天</div>
+                 </div>
             </div>
-            <!-- REMOVED Static Header Buttons (kept member list toggle) -->
-            <div class="flex items-center space-x-3 text-discord-text-muted">
-                 <!-- <button class="hover:text-white" title="通知设置"><span class="material-symbols-outlined text-xl">notifications</span></button> -->
-                 <!-- <button class="hover:text-white" title="置顶消息"><span class="material-symbols-outlined text-xl">push_pin</span></button> -->
-                 <button id="member-list-toggle-button" class="hover:text-white md:hidden" title="成员列表">
-                     <span class="material-symbols-outlined text-xl">group</span>
-                </button>
-                <button class="hover:text-white hidden md:inline-block" title="成员列表">
-                     <span class="material-symbols-outlined text-xl">group</span>
-                </button>
-                 <!-- <div class="relative">
-                    <input type="text" placeholder="搜索" class="bg-discord-gray-1 text-sm rounded-discord px-2 py-0.5 w-36 focus:outline-none focus:ring-1 focus:ring-discord-blurple">
-                     <span class="material-symbols-outlined absolute right-1.5 top-1/2 transform -translate-y-1/2 text-sm">search</span>
-                 </div> -->
-                 <!-- <button class="hover:text-white" title="收件箱"><span class="material-symbols-outlined text-xl">inbox</span></button> -->
-                 <!-- <button class="hover:text-white" title="帮助"><span class="material-symbols-outlined text-xl">help</span></button> -->
+            <!-- Header Buttons (Optional) -->
+            <div class="flex items-center space-x-3 text-discord-text-muted flex-shrink-0">
+                 <!-- Example: Call Button (if implementing calls) -->
+                 <!-- <button class="hover:text-white" title="开始语音通话"><span class="material-symbols-outlined text-xl">call</span></button> -->
+                 <!-- Example: Video Call Button -->
+                 <!-- <button class="hover:text-white" title="开始视频通话"><span class="material-symbols-outlined text-xl">videocam</span></button> -->
+                 <!-- Member List Toggle (if using sidebar) -->
+                 <!-- <button id="member-list-toggle-button" class="hover:text-white" title="成员列表"><span class="material-symbols-outlined text-xl">group</span></button> -->
             </div>
         </div>
 
         <!-- 消息列表 -->
-        <div class="flex-1 overflow-y-auto p-4 space-y-4" id="message-list">
+        <div class="flex-1 overflow-y-auto p-4 space-y-1" id="message-list"> <!-- Reduced space-y-4 to space-y-1 -->
              <!-- Empty State Placeholder -->
             <div id="empty-message-list" class="flex flex-col items-center justify-center h-full text-center text-discord-text-muted"> <!-- Initially visible -->
                  <span class="material-symbols-outlined text-6xl mb-4">chat</span> <!-- Chat Icon -->
@@ -139,60 +137,39 @@
         </div>
 
         <!-- 正在输入提示 -->
-        <div id="typing-indicator" class="px-4 pb-1 h-6 text-xs text-discord-text-muted items-center hidden">
+        <div id="typing-indicator" class="px-4 pb-1 h-6 text-xs text-discord-text-muted items-center hidden"> <!-- Initially hidden, uses flex when shown -->
              <!-- Typing dots remain -->
              <span class="mr-1">
                 <span class="typing-dot"></span>
                 <span class="typing-dot"></span>
                 <span class="typing-dot"></span>
             </span>
-            <span id="typing-users">用户B</span> 正在输入...
+            <span id="typing-users">用户</span> 正在输入...
         </div>
 
         <!-- 消息输入框 (初始隐藏，仅在连接到选定联系人时显示) -->
-        <div class="px-4 pb-4 flex-shrink-0 chat-input-area hidden"> <!-- Added chat-input-area class and hidden -->
+        <div id="chat-input-container" class="px-4 pb-4 flex-shrink-0 hidden"> <!-- Initially hidden -->
             <div class="bg-discord-gray-4 rounded-lg flex items-center px-3">
-                <input type="file" id="file-input" class="hidden"> <!-- Hidden File Input -->
-                <button id="upload-button" class="text-discord-text-muted hover:text-white mr-2" title="上传文件">
-                     <span class="material-symbols-outlined text-xl bg-discord-gray-5 p-1 rounded-full">add_circle</span> <!-- Plus Icon in circle -->
+                <input type="file" id="file-input" class="hidden" multiple> <!-- Hidden File Input, allow multiple -->
+                <button id="upload-button" class="text-discord-text-muted hover:text-white mr-2 p-1" title="上传文件">
+                     <span class="material-symbols-outlined text-xl">add_circle</span>
                 </button>
-                <input type="text" id="message-input" placeholder="发送消息" class="flex-1 bg-transparent py-2.5 text-sm text-discord-text-primary placeholder-discord-text-muted focus:outline-none"> <!-- Placeholder updated -->
-                 <!-- REMOVED Static Input Buttons -->
+                <input type="text" id="message-input" placeholder="发送消息给..." class="flex-1 bg-transparent py-2.5 text-sm text-discord-text-primary placeholder-discord-text-muted focus:outline-none">
+                 <!-- Send Button (Optional, can rely on Enter key) -->
                  <!--
-                 <button class="text-discord-text-muted hover:text-white ml-2" title="赠送礼物"><span class="material-symbols-outlined text-xl">card_giftcard</span></button>
-                 <button class="text-discord-text-muted hover:text-white ml-2" title="GIF"><span class="material-symbols-outlined text-xl">gif_box</span></button>
-                 <button class="text-discord-text-muted hover:text-white ml-2" title="表情"><span class="material-symbols-outlined text-xl">mood</span></button>
+                 <button id="send-button" class="text-discord-blurple hover:text-blue-400 ml-2 p-1" title="发送">
+                     <span class="material-symbols-outlined text-xl">send</span>
+                 </button>
                  -->
              </div>
         </div>
     </div>
 
-    <!-- 成员列表 (右侧边栏) -->
-    <div id="member-list-sidebar" class="w-60 bg-discord-gray-2 border-l border-discord-gray-5 flex-col flex-shrink-0 hidden md:flex">
-        <!-- Sidebar content goes here -->
-        <div class="flex-1 p-3 space-y-4 overflow-y-auto">
-            <!-- Online members -->
-            <div>
-                <h3 class="text-xs font-semibold uppercase text-discord-text-muted mb-2">在线 - <span id="online-count">1</span></h3>
-                <div class="space-y-2" id="online-list-container"></div>
-            </div>
-            <!-- Offline members -->
-            <div>
-                 <h3 class="text-xs font-semibold uppercase text-discord-text-muted mb-2">离线 - <span id="offline-count">4</span></h3>
-                 <div class="space-y-2" id="offline-list-container"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Scripts -->
-    <!-- Load Lucide icons library (REMOVED) -->
-    <!-- <script src="https://unpkg.com/lucide@latest"></script> -->
+    <!-- Optional: Member List Sidebar (if needed) -->
+    <!-- <div id="member-list-sidebar" class="w-60 bg-discord-gray-2 border-l border-discord-gray-5 flex-col flex-shrink-0 hidden md:flex"> ... </div> -->
 
     <!-- Main application script (module) -->
     <script type="module" src="main.js"></script>
-
-    <!-- Initialize Lucide icons (REMOVED) -->
-    <!-- <script>lucide.createIcons();</script> -->
 
 </body>
 </html>

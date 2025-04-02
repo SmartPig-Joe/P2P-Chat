@@ -1,3 +1,17 @@
+/* --- BEGIN: Add Font Face Rule --- */
+@font-face {
+  font-family: 'Material Symbols Outlined'; /* 保持我们定义的字体名称 */
+  font-style: normal;
+  /* 注意：根据文件名，这个字体文件可能只包含字重 100。
+     如果需要其他字重，可能需要下载包含所有字重的文件或单独下载其他字重文件。
+     暂时先设置为 100，如果图标显示不正确或需要不同粗细，再调整。*/
+  font-weight: 100;
+  font-display: swap;
+  /* 更新 src 以匹配您的文件名和格式 (woff)，并使用正斜杠 */
+  src: url(./fonts/material-symbols-outlined-latin-100-normal.woff) format('woff');
+}
+/* --- END: Add Font Face Rule --- */
+
 /* Base styles (keep these if not using Tailwind base) */
 body {
     font-family: Inter, sans-serif; /* Match Tailwind config */
@@ -5,15 +19,20 @@ body {
 
 /* Add styles for Material Symbols */
 .material-symbols-outlined {
+  font-family: 'Material Symbols Outlined'; /* 使用上面 @font-face 定义的字体名称 */
   font-variation-settings:
   'FILL' 0,
-  'wght' 400,
+  'wght' 400, /* 注意：这里请求的字重是 400，但上面加载的字体文件可能是 100。*/
+             /* 如果图标显示不出来或样式不对，可能需要下载包含 400 字重的字体文件，*/
+             /* 或者将这里的 'wght' 调整为 100 试试看。*/
   'GRAD' 0,
   'opsz' 24;
-  font-size: 1.25rem; /* Match previous icon size */
+  font-size: 1.25rem;
   line-height: 1;
   vertical-align: middle;
-  display: inline-block; /* Ensure correct alignment */
+  display: inline-block;
+  font-optical-sizing: auto;
+  font-weight: normal; /* 保持 normal，让 variation-settings 控制 */
 }
 
 /* 自定义滚动条样式 */
