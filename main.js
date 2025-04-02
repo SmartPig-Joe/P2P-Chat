@@ -5,6 +5,7 @@ import * as ui from './ui.js';
 import * as connection from './connection.js';
 import * as fileTransfer from './fileTransfer.js';
 import { TYPING_TIMER_LENGTH } from './constants.js';
+import * as storage from './storage.js'; // Import storage module
 
 // --- Event Handlers ---
 
@@ -26,54 +27,73 @@ function handleConnectButtonClick() {
 
 // Handle Sending Text Messages
 async function handleSendMessage(event) {
+    console.log(`[Debug] handleSendMessage triggered. Event type: ${event.type}, Key: ${event.key}`); // 添加日志
     if (event.type === 'keypress' && event.key !== 'Enter') return;
-    if (!dom.messageInput) return;
+    console.log('[Debug] handleSendMessage: Enter key pressed or event type is not keypress.'); // 添加日志
+
+    if (!dom.messageInput) {
+        console.error('[Debug] handleSendMessage: messageInput DOM element not found!'); // 添加日志
+        return;
+    }
 
     const messageText = dom.messageInput.value.trim();
+    console.log(`[Debug] handleSendMessage: Message text trimmed: "${messageText}"`); // 添加日志
 
     // Stop typing indicator immediately if Enter is pressed
     if (event.type === 'keypress' && event.key === 'Enter') {
         stopLocalTypingIndicator(); // Stop indicator regardless of message content
-        if (messageText === '') return; // Don't send empty messages on Enter
-    }
-
-    // If not Enter keypress, only proceed if text is not empty (e.g., for a send button click)
-    if (event.type !== 'keypress' && messageText === '') {
-        return;
-    }
-
-    if (state.isConnected && state.dataChannel?.readyState === 'open' && state.sharedKey) {
-        const messagePayload = { text: messageText, timestamp: Date.now() };
-        try {
-            // Send the encrypted chat message
-            await connection.sendEncryptedData('encryptedChat', messagePayload);
-
-            // Add message locally AFTER successful send
-            ui.addP2PMessageToList({ ...messagePayload, isLocal: true });
-
-            // Clear input and reset state
-            dom.messageInput.value = '';
-            stopLocalTypingIndicator(); // Ensure indicator is stopped
-            dom.messageInput.focus();
-
-        } catch (e) {
-            // Error already logged by sendEncryptedData
-            // ui.addSystemMessage("发送消息失败。", true); // Potentially redundant
+        if (messageText === '') {
+            console.log('[Debug] handleSendMessage: Empty message on Enter, not sending.'); // 添加日志
+            return; // Don't send empty messages on Enter
         }
-    } else {
-        let errorMsg = "无法发送消息：";
-        if (!state.isConnected) errorMsg += "未连接。";
-        else if (!state.dataChannel || state.dataChannel.readyState !== 'open') errorMsg += "数据通道未就绪。";
-        else if (!state.sharedKey) errorMsg += "加密尚未建立。";
-        else errorMsg += "未知错误。";
-        ui.addSystemMessage(errorMsg, true);
+    }
+
+    // Prevent sending if connection/encryption is not ready
+    if (!state.isConnected || !state.sharedKey || state.remoteUserId !== ui.getSelectedPeerId()) {
+         console.warn(`[Debug] handleSendMessage: Cannot send, state check failed. isConnected: ${state.isConnected}, sharedKey: ${!!state.sharedKey}, remoteUserId: ${state.remoteUserId}, selectedPeerId: ${ui.getSelectedPeerId()}`); // 添加日志
+         ui.addSystemMessage("无法发送消息：连接或加密未就绪，或未选择正确的联系人。", true);
+         return;
+    }
+
+    const timestamp = Date.now();
+    const messageData = {
+        type: 'text', // Explicitly type as text
+        text: messageText,
+        timestamp: timestamp,
+        peerId: state.remoteUserId, // Message is intended for the connected peer
+        isLocal: true // This is a locally sent message
+    };
+
+    try {
+        console.log('[Debug] handleSendMessage: Preparing to send encrypted chat message...'); // 添加日志
+        await connection.sendEncryptedData('encryptedChat', { text: messageText, timestamp });
+        console.log('[Debug] handleSendMessage: sendEncryptedData call successful.'); // 添加日志
+
+        // Display the message locally immediately AFTER successful send attempt
+        ui.addP2PMessageToList(messageData);
+
+        // Save sent message to local storage AFTER UI update
+        try {
+             await storage.addMessage(messageData);
+             console.log('[Debug] handleSendMessage: Sent message saved to local storage.'); // 添加日志
+        } catch (storageError) {
+             console.error("[Debug] handleSendMessage: Failed to save sent message to local storage:", storageError);
+        }
+
+        // Clear input and refocus
+        dom.messageInput.value = '';
+        dom.messageInput.focus();
+
+    } catch (error) {
+        console.error("[Debug] handleSendMessage: Failed to send message:", error);
+        ui.addSystemMessage(`发送消息失败: ${error.message}`, true);
     }
 }
 
 // Handle Local User Typing
 function handleLocalTyping() {
-    if (!state.isConnected || !state.dataChannel || state.dataChannel.readyState !== 'open' || !state.sharedKey) {
-        // console.warn("Cannot send typing indicator: Not connected or encrypted.");
+    // Send typing indicator only if connected to the selected peer
+    if (!state.isConnected || state.remoteUserId !== ui.selectedPeerId || !state.dataChannel || state.dataChannel.readyState !== 'open' || !state.sharedKey) {
         return;
     }
 
@@ -98,14 +118,17 @@ function stopLocalTypingIndicator() {
         clearTimeout(state.typingTimeout);
         state.setTypingTimeout(null);
         state.setIsTyping(false);
-        sendTypingState('stopped_typing');
+        // Send stopped typing only if still connected to the selected peer
+        if (state.isConnected && state.remoteUserId === ui.selectedPeerId && state.dataChannel?.readyState === 'open' && state.sharedKey) {
+            sendTypingState('stopped_typing');
+        }
     }
 }
 
 // Send typing state update (encrypted)
 async function sendTypingState(type) { // type = 'typing' or 'stopped_typing'
-     if (!state.isConnected || !state.dataChannel || state.dataChannel.readyState !== 'open' || !state.sharedKey) {
-        // console.warn(`Cannot send ${type} state: Not connected or encrypted.`);
+     // Double check connection state before sending
+     if (!state.isConnected || state.remoteUserId !== ui.selectedPeerId || !state.dataChannel || state.dataChannel.readyState !== 'open' || !state.sharedKey) {
         return;
     }
     try {
@@ -122,8 +145,19 @@ async function sendTypingState(type) { // type = 'typing' or 'stopped_typing'
 
 // --- Initialization ---
 
-function initializeApp() {
+// Make initializeApp async to await DB initialization
+async function initializeApp() {
     console.log("Initializing P2P Chat Application...");
+
+    // 0. Initialize Database first
+    try {
+        await storage.initDB();
+        console.log("Database initialized successfully.");
+    } catch (error) {
+        console.error("Failed to initialize database:", error);
+        ui.addSystemMessage("错误：无法初始化本地存储。聊天记录将不会被保存。", true);
+        // Depending on requirements, might want to halt app or proceed without storage
+    }
 
     // 1. Initial UI Setup
     ui.updateConnectionStatus("未连接", 'neutral');
@@ -131,14 +165,6 @@ function initializeApp() {
         dom.localUserIdSpan.textContent = state.localUserId;
     } else {
         console.warn("local-user-id span not found in HTML");
-    }
-    // Disable channel links (not implemented)
-    if (dom.channelLinks.length > 0) {
-        dom.channelLinks.forEach(link => {
-            link.style.opacity = '0.5';
-            link.style.pointerEvents = 'none';
-        });
-        ui.addSystemMessage("频道切换已禁用，请使用上方连接功能。");
     }
     // Populate member list initially
     ui.populateMemberList();
@@ -149,8 +175,16 @@ function initializeApp() {
     // Check initial empty state for message list
     ui.updateEmptyState();
     // Initial system message
-    ui.addSystemMessage('输入对方的用户 ID，然后点击"连接"按钮发起 P2P 聊天。');
+    ui.addSystemMessage('从左侧选择联系人查看记录，或在上方输入 ID 进行连接。');
 
+    // Load and populate contacts list from storage
+    try {
+        const peerIds = await storage.getAllPeerIds();
+        ui.populateContactsList(peerIds);
+    } catch (error) {
+        console.error("Failed to load contacts list:", error);
+        ui.addSystemMessage("加载联系人列表失败。", true);
+    }
 
     // 2. Setup Event Listeners
     if (dom.connectButton) {
@@ -179,7 +213,12 @@ function initializeApp() {
         console.warn("Upload button or file input not found in HTML");
     }
 
-    // Other listeners (e.g., for message list clicks) can be added here if needed
+    // Add listener for clicks within the contacts list container
+    if (dom.contactsListContainer) {
+        dom.contactsListContainer.addEventListener('click', ui.handleContactClick);
+    } else {
+        console.warn("Contacts list container not found in HTML");
+    }
 
     // 3. Connect WebSocket to Signaling Server
     connection.connectWebSocket();

@@ -1,10 +1,34 @@
 // state.js
 
+// Define the key for localStorage
+const LOCAL_USER_ID_KEY = 'p2pChatLocalUserId';
+
+// Function to get or generate the local user ID
+function initializeLocalUserId() {
+    let userId = localStorage.getItem(LOCAL_USER_ID_KEY);
+    if (!userId) {
+        // Generate a new ID if none exists
+        userId = `user-${Math.random().toString(36).substring(2, 8)}`;
+        try {
+            // Save the newly generated ID to localStorage
+            localStorage.setItem(LOCAL_USER_ID_KEY, userId);
+            console.log('Generated and saved new local user ID:', userId);
+        } catch (e) {
+            console.error('Failed to save local user ID to localStorage:', e);
+            // Proceed with the generated ID even if saving failed
+        }
+    } else {
+        console.log('Retrieved local user ID from localStorage:', userId);
+    }
+    return userId;
+}
+
 // --- WebRTC & WebSocket Globals ---
 export let ws = null;
 export let peerConnection = null;
 export let dataChannel = null;
-export let localUserId = `user-${Math.random().toString(36).substring(2, 8)}`;
+// Initialize localUserId using the function
+export let localUserId = initializeLocalUserId();
 export let remoteUserId = null;
 export let isConnected = false;
 export let isConnecting = false;

@@ -2,66 +2,72 @@
 import * as dom from './dom.js';
 import * as state from './state.js';
 import { FILE_CHUNK_SIZE } from './constants.js';
-import { addSystemMessage, addFileMessageToList } from './ui.js';
+import * as ui from './ui.js';
 import { escapeHTML } from './utils.js';
 
 // --- Sending Files ---
 
 export function handleFileSelect(event) {
-    if (!state.isConnected || !state.dataChannel || state.dataChannel.readyState !== 'open') {
-        addSystemMessage("无法发送文件：未连接或数据通道未就绪。", true);
+    console.log("[Debug] handleFileSelect triggered.");
+    if (!state.isConnected || state.remoteUserId !== ui.getSelectedPeerId() || !state.dataChannel || state.dataChannel.readyState !== 'open') {
+        const errorMsg = `Cannot send file. State check failed. isConnected: ${state.isConnected}, remoteUserId: ${state.remoteUserId}, selectedPeerId: ${ui.getSelectedPeerId()}, dataChannel exists: ${!!state.dataChannel}, state: ${state.dataChannel?.readyState}`;
+        console.warn(`[Debug] handleFileSelect: ${errorMsg}`);
+        ui.addSystemMessage("无法发送文件：未连接到当前选中的联系人或数据通道未就绪。", true);
+        if(event.target) event.target.value = null;
         return;
     }
 
     const file = event.target.files[0];
-    if (!file) return;
+    if (!file) {
+        console.log("[Debug] handleFileSelect: No file selected.");
+        return;
+    }
 
-    console.log(`Selected file: ${file.name}, Size: ${file.size}, Type: ${file.type}`);
-
-    // Reset the file input so the same file can be selected again
+    console.log(`[Debug] handleFileSelect: Selected file: ${file.name}, Size: ${file.size}, Type: ${file.type}`);
     event.target.value = null;
 
-    // Generate a unique ID for this transfer
     const transferId = `file-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const recipientPeerId = state.remoteUserId;
+    console.log(`[Debug] handleFileSelect: Generated transferId: ${transferId} for recipient: ${recipientPeerId}`);
 
     const fileInfo = {
         transferId: transferId,
         name: file.name,
         size: file.size,
         type: file.type,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        peerId: recipientPeerId
     };
 
-    // 1. Send file metadata
     try {
         const messageToSend = { type: 'file-info', payload: fileInfo };
         state.dataChannel.send(JSON.stringify(messageToSend));
         console.log("Sent file-info:", fileInfo);
-        // Display message locally (showing progress)
-        addFileMessageToList(fileInfo, true, null, 0);
+        ui.addFileMessageToList(fileInfo, true, null, 0);
+        ui.addContactToList(recipientPeerId);
     } catch (e) {
-        console.error("Failed to send file-info:", e);
-        addSystemMessage(`发送文件 ${escapeHTML(file.name)} 的信息失败。`, true);
+        console.error("[Debug] handleFileSelect: Failed to send file-info:", e);
+        ui.addSystemMessage(`发送文件 ${escapeHTML(file.name)} 的信息失败。`, true);
         return;
     }
 
-    // 2. Send file chunks
+    console.log(`[Debug] handleFileSelect: Calling sendFileChunks for ${transferId}`);
     sendFileChunks(file, transferId, fileInfo);
 }
 
 async function sendFileChunks(file, transferId, fileInfo) {
+    console.log(`[Debug] sendFileChunks started for ${transferId}`);
     let offset = 0;
     const fileReader = new FileReader();
     let chunkCount = 0;
     const totalChunks = Math.ceil(file.size / FILE_CHUNK_SIZE);
+    const recipientPeerId = fileInfo.peerId;
 
-    // Function to read the next chunk
     const readNextChunk = () => {
-        if (!state.isConnected || !state.dataChannel || state.dataChannel.readyState !== 'open') {
-            console.warn(`[${transferId}] Connection lost during send. Aborting.`);
-            addSystemMessage(`文件 ${escapeHTML(file.name)} 发送中断。`, true);
-            // Clean up UI potentially? (Mark as failed?)
-            addFileMessageToList(fileInfo, true, null, -1); // Use progress -1 to indicate failure
+        if (!state.isConnected || state.remoteUserId !== recipientPeerId || !state.dataChannel || state.dataChannel.readyState !== 'open') {
+            console.warn(`[${transferId}] Connection lost to ${recipientPeerId} during send. Aborting.`);
+            ui.addSystemMessage(`文件 ${escapeHTML(file.name)} 发送中断。`, true);
+            ui.addFileMessageToList(fileInfo, true, null, -1);
             return;
         }
         const slice = file.slice(offset, offset + FILE_CHUNK_SIZE);
@@ -72,105 +78,96 @@ async function sendFileChunks(file, transferId, fileInfo) {
         const chunk = e.target.result;
         if (!chunk) {
              console.error(`[${transferId}] FileReader returned null chunk.`);
-             addSystemMessage(`读取文件 ${escapeHTML(file.name)} 时出错 (null chunk)。`, true);
-             addFileMessageToList(fileInfo, true, null, -1);
+             ui.addSystemMessage(`读取文件 ${escapeHTML(file.name)} 时出错 (null chunk)。`, true);
+             ui.addFileMessageToList(fileInfo, true, null, -1);
              return;
         }
         chunkCount++;
         console.log(`Sending chunk ${chunkCount}/${totalChunks} for ${transferId}`);
 
         try {
-            // Prepend transferId to the ArrayBuffer chunk for identification on the receiving side
-            const idBuffer = new TextEncoder().encode(transferId + '|'); // Separator '|'
+            const idBuffer = new TextEncoder().encode(transferId + '|');
             const combinedBuffer = new ArrayBuffer(idBuffer.byteLength + chunk.byteLength);
             const combinedView = new Uint8Array(combinedBuffer);
             combinedView.set(new Uint8Array(idBuffer), 0);
             combinedView.set(new Uint8Array(chunk), idBuffer.byteLength);
 
-            // Check dataChannel buffer before sending
-            const BUFFER_THRESHOLD = 512 * 1024; // 512KB threshold
+            const BUFFER_THRESHOLD = 512 * 1024;
             while (state.dataChannel && state.dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
                 console.log(`[${transferId}] DataChannel buffer full (${state.dataChannel.bufferedAmount}), waiting...`);
-                await new Promise(resolve => setTimeout(resolve, 100)); // Wait briefly
-                 if (!state.isConnected || !state.dataChannel || state.dataChannel.readyState !== 'open') {
+                await new Promise(resolve => setTimeout(resolve, 50));
+                 if (!state.isConnected || state.remoteUserId !== recipientPeerId || !state.dataChannel || state.dataChannel.readyState !== 'open') {
                     console.warn(`[${transferId}] Connection lost while waiting for buffer. Aborting.`);
-                    addSystemMessage(`文件 ${escapeHTML(file.name)} 发送中断 (缓冲区)。`, true);
-                    addFileMessageToList(fileInfo, true, null, -1);
+                    ui.addSystemMessage(`文件 ${escapeHTML(file.name)} 发送中断 (缓冲区)。`, true);
+                    ui.addFileMessageToList(fileInfo, true, null, -1);
                     return;
                 }
             }
 
-             if (!state.dataChannel || state.dataChannel.readyState !== 'open') {
-                 console.warn(`[${transferId}] DataChannel closed before sending chunk ${chunkCount}. Aborting.`);
-                 addSystemMessage(`文件 ${escapeHTML(file.name)} 发送中断 (通道关闭)。`, true);
-                 addFileMessageToList(fileInfo, true, null, -1);
+             if (!state.dataChannel || state.dataChannel.readyState !== 'open' || state.remoteUserId !== recipientPeerId) {
+                 console.warn(`[${transferId}] DataChannel closed or connection changed before sending chunk ${chunkCount}. Aborting.`);
+                 ui.addSystemMessage(`文件 ${escapeHTML(file.name)} 发送中断 (通道关闭/变更)。`, true);
+                 ui.addFileMessageToList(fileInfo, true, null, -1);
                  return;
              }
 
             state.dataChannel.send(combinedBuffer);
             offset += chunk.byteLength;
 
-            // Update local progress
             const progress = offset / file.size;
-            addFileMessageToList(fileInfo, true, null, progress);
+            ui.addFileMessageToList(fileInfo, true, null, progress);
 
             if (offset < file.size) {
-                // Schedule the next chunk read
-                 setTimeout(readNextChunk, 0); // Use setTimeout to avoid blocking UI thread
+                setTimeout(readNextChunk, 0);
             } else {
-                // All chunks sent, send the end signal
                 console.log(`[${transferId}] Finished sending all chunks.`);
                 const endMessage = { type: 'file-end', payload: { transferId: transferId } };
                 try {
-                    if (state.dataChannel && state.dataChannel.readyState === 'open') {
+                    if (state.dataChannel && state.dataChannel.readyState === 'open' && state.remoteUserId === recipientPeerId) {
                         state.dataChannel.send(JSON.stringify(endMessage));
                          console.log(`[${transferId}] Sent file-end message.`);
-                         // Update local message to 'Sent' status only AFTER sending file-end
-                         addFileMessageToList(fileInfo, true, null, 1); // Progress 1 signals completion for sender
+                         ui.addFileMessageToList(fileInfo, true, null, 1);
                     } else {
-                         console.warn(`[${transferId}] Cannot send file-end, DataChannel closed.`);
-                         addFileMessageToList(fileInfo, true, null, -1); // Mark as failed if cannot send end message
+                         console.warn(`[${transferId}] Cannot send file-end, DataChannel closed or connection changed.`);
+                         ui.addFileMessageToList(fileInfo, true, null, -1);
                     }
                 } catch (endError) {
                      console.error(`[${transferId}] Error sending file-end message:`, endError);
-                     addSystemMessage(`发送文件 ${escapeHTML(file.name)} 结束信号失败。`, true);
-                     addFileMessageToList(fileInfo, true, null, -1); // Mark as failed
+                     ui.addSystemMessage(`发送文件 ${escapeHTML(file.name)} 结束信号失败。`, true);
+                     ui.addFileMessageToList(fileInfo, true, null, -1);
                 }
             }
         } catch (error) {
             console.error(`[${transferId}] Error sending chunk ${chunkCount}:`, error);
             const errorMsg = error instanceof Error ? error.message : String(error);
-            addSystemMessage(`发送文件 ${escapeHTML(file.name)} 的块 ${chunkCount} 失败: ${errorMsg}`, true);
-            addFileMessageToList(fileInfo, true, null, -1); // Mark as failed on chunk send error
-            // Stop sending further chunks
+            ui.addSystemMessage(`发送文件 ${escapeHTML(file.name)} 的块 ${chunkCount} 失败: ${errorMsg}`, true);
+            ui.addFileMessageToList(fileInfo, true, null, -1);
             return;
         }
     };
 
     fileReader.onerror = (error) => {
         console.error(`[${transferId}] FileReader error:`, error);
-        addSystemMessage(`读取文件 ${escapeHTML(file.name)} 时出错。`, true);
-        addFileMessageToList(fileInfo, true, null, -1); // Mark as failed on reader error
+        ui.addSystemMessage(`读取文件 ${escapeHTML(file.name)} 时出错。`, true);
+        ui.addFileMessageToList(fileInfo, true, null, -1);
     };
 
-    // Start reading the first chunk
     readNextChunk();
 }
 
 // --- Receiving Files ---
 
 export function handleIncomingFileInfo(fileInfo) {
-    if (!fileInfo || !fileInfo.transferId || !fileInfo.name || typeof fileInfo.size !== 'number') {
+    if (!fileInfo || !fileInfo.transferId || !fileInfo.name || typeof fileInfo.size !== 'number' || !fileInfo.senderId) {
         console.error("Received invalid file-info:", fileInfo);
-        addSystemMessage("收到无效的文件信息。", true);
+        ui.addSystemMessage("收到无效的文件信息。", true);
         return;
     }
     const transferId = fileInfo.transferId;
-    console.log(`Received file-info for ${transferId}:`, fileInfo);
+    const senderId = fileInfo.senderId;
+    console.log(`Received file-info for ${transferId} from ${senderId}:`, fileInfo);
 
-    // Access state directly
     const currentIncomingFiles = state.incomingFiles;
-
     if (currentIncomingFiles[transferId]) {
         console.warn(`Received duplicate file-info for transfer ID: ${transferId}. Ignoring.`);
         return;
@@ -181,20 +178,20 @@ export function handleIncomingFileInfo(fileInfo) {
         chunks: [],
         receivedSize: 0
     };
-    state.setIncomingFiles({...currentIncomingFiles}); // Update state
+    state.setIncomingFiles({...currentIncomingFiles});
 
-    // Display message locally (showing progress)
-    addFileMessageToList(fileInfo, false, null, 0);
-    addSystemMessage(`正在接收文件: ${escapeHTML(fileInfo.name)}`);
+    fileInfo.peerId = senderId;
+    ui.addFileMessageToList(fileInfo, false, null, 0);
+    if (senderId === ui.selectedPeerId) {
+        ui.addSystemMessage(`正在接收文件: ${escapeHTML(fileInfo.name)}`);
+    }
 }
 
 export function handleIncomingFileChunk(arrayBuffer) {
     try {
-         // Separate the transferId from the chunk data
         const view = new Uint8Array(arrayBuffer);
         let separatorIndex = -1;
-        // Search for '|' (ASCII 124)
-        for (let i = 0; i < Math.min(view.length, 60); i++) { // Check slightly more bytes for longer IDs
+        for (let i = 0; i < Math.min(view.length, 60); i++) {
             if (view[i] === 124) {
                 separatorIndex = i;
                 break;
@@ -210,51 +207,47 @@ export function handleIncomingFileChunk(arrayBuffer) {
         const chunkData = arrayBuffer.slice(separatorIndex + 1);
         const transferId = new TextDecoder().decode(idBuffer);
 
-        // Access state directly
         const currentIncomingFiles = state.incomingFiles;
         const fileData = currentIncomingFiles[transferId];
 
         if (!fileData) {
             console.warn(`[${transferId}] Received chunk for unknown/completed transfer ID.`);
-            // Maybe request file-info again? For now, just ignore.
             return;
         }
 
-        // Check if file transfer was aborted (e.g., incomplete on file-end)
-        if (!currentIncomingFiles[transferId]) {
-             console.log(`[${transferId}] Ignoring chunk, transfer was likely aborted or completed.`);
+        const senderId = fileData.info.senderId;
+        if (!currentIncomingFiles[transferId] || !state.isConnected || state.remoteUserId !== senderId) {
+             console.log(`[${transferId}] Ignoring chunk, transfer aborted or sender changed.`);
+             if (currentIncomingFiles[transferId]) {
+                 delete currentIncomingFiles[transferId];
+                 state.setIncomingFiles({...currentIncomingFiles});
+                 if (senderId === ui.selectedPeerId) {
+                    ui.addFileMessageToList(fileData.info, false, null, -1);
+                 }
+             }
              return;
         }
 
         fileData.chunks.push(chunkData);
         fileData.receivedSize += chunkData.byteLength;
 
-        // Basic check against excessive size
-        if (fileData.receivedSize > fileData.info.size * 1.1) { // Allow 10% buffer? No, should be exact.
-             if (fileData.receivedSize > fileData.info.size) {
-                console.error(`[${transferId}] Received more data than expected size. Expected ${fileData.info.size}, got ${fileData.receivedSize}. Aborting.`);
-                addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 接收数据异常，已中止。`, true);
-                delete currentIncomingFiles[transferId];
-                state.setIncomingFiles({...currentIncomingFiles}); // Update state
-                // Update UI to show failure
-                addFileMessageToList(fileData.info, false, null, -1);
-                return;
-            }
+        if (fileData.receivedSize > fileData.info.size) {
+            console.error(`[${transferId}] Received more data than expected size. Aborting.`);
+            ui.addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 接收数据异常，已中止。`, true);
+            delete currentIncomingFiles[transferId];
+            state.setIncomingFiles({...currentIncomingFiles});
+            ui.addFileMessageToList(fileData.info, false, null, -1);
+            return;
         }
 
         const progress = fileData.receivedSize / fileData.info.size;
         console.log(`[${transferId}] Received chunk ${fileData.chunks.length}. Progress: ${Math.round(progress * 100)}%`);
 
-        // Update UI progress
-        addFileMessageToList(fileData.info, false, null, progress);
-
-        // No need to explicitly update state here as we modified the object directly
-        // But if state management required immutability: state.setIncomingFiles({...currentIncomingFiles});
+        ui.addFileMessageToList(fileData.info, false, null, progress);
 
     } catch (error) {
         console.error("Error processing incoming file chunk:", error);
-        // Attempt to identify which transfer failed if possible, though transferId might be corrupt
-        addSystemMessage("处理接收到的文件块时出错。", true);
+        ui.addSystemMessage("处理接收到的文件块时出错。", true);
     }
 }
 
@@ -266,7 +259,6 @@ export function handleIncomingFileEnd(payload) {
     const transferId = payload.transferId;
     console.log(`[${transferId}] Received file-end signal.`);
 
-    // Access state directly
     const currentIncomingFiles = state.incomingFiles;
     const fileData = currentIncomingFiles[transferId];
 
@@ -275,13 +267,12 @@ export function handleIncomingFileEnd(payload) {
         return;
     }
 
-    // Final check: Did we receive the expected amount of data?
     if (fileData.receivedSize !== fileData.info.size) {
         console.error(`[${transferId}] File transfer incomplete. Expected ${fileData.info.size}, got ${fileData.receivedSize}.`);
-        addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 接收不完整。`, true);
-        // Update UI to show failure state
-        addFileMessageToList(fileData.info, false, null, -1); // Use -1 for failure
-        // Clean up
+        if (fileData.info.senderId === ui.selectedPeerId) {
+            ui.addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 接收不完整。`, true);
+        }
+        ui.addFileMessageToList(fileData.info, false, null, -1);
         delete currentIncomingFiles[transferId];
         state.setIncomingFiles({...currentIncomingFiles});
         return;
@@ -289,40 +280,29 @@ export function handleIncomingFileEnd(payload) {
 
     console.log(`[${transferId}] File received completely. Assembling...`);
     try {
-        // Combine chunks into a Blob
         const fileBlob = new Blob(fileData.chunks, { type: fileData.info.type });
-
-        // Verify Blob size as a final check
         if (fileBlob.size !== fileData.info.size) {
              console.error(`[${transferId}] Assembled Blob size mismatch! Expected ${fileData.info.size}, got ${fileBlob.size}.`);
-             addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 组装后大小不匹配。`, true);
-             addFileMessageToList(fileData.info, false, null, -1);
+             ui.addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 组装后大小不匹配。`, true);
+             ui.addFileMessageToList(fileData.info, false, null, -1);
              delete currentIncomingFiles[transferId];
              state.setIncomingFiles({...currentIncomingFiles});
              return;
         }
 
-        // Create a downloadable URL
         const downloadUrl = URL.createObjectURL(fileBlob);
         console.log(`[${transferId}] File assembled. Download URL created.`);
 
-        // Update the message in the list to show the download link
-        addFileMessageToList(fileData.info, false, downloadUrl, 1); // Progress 1 for completion
-        addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 接收完成。`);
-
-        // It's crucial to revoke the object URL when it's no longer needed to free memory.
-        // However, we need the link to persist in the UI. A potential strategy:
-        // 1. Store the URL with the message data.
-        // 2. Add a click listener to the message/link that revokes the URL *after* the download theoretically starts (or fails).
-        // For simplicity now, we are not revoking it, which can lead to memory leaks if many files are transferred.
-        // Consider adding URL.revokeObjectURL(downloadUrl) in a cleanup function or event handler.
+        ui.addFileMessageToList(fileData.info, false, downloadUrl, 1);
+        if (fileData.info.senderId === ui.selectedPeerId) {
+            ui.addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 接收完成。`);
+        }
 
     } catch (error) {
         console.error(`[${transferId}] Error creating Blob or Object URL:`, error);
-        addSystemMessage(`处理接收到的文件 ${escapeHTML(fileData.info.name)} 时出错。`, true);
-        addFileMessageToList(fileData.info, false, null, -1); // Mark as failed
+        ui.addSystemMessage(`处理接收到的文件 ${escapeHTML(fileData.info.name)} 时出错。`, true);
+        ui.addFileMessageToList(fileData.info, false, null, -1);
     } finally {
-         // Clean up stored chunks and data for this transfer ID regardless of success/failure in assembly
          delete currentIncomingFiles[transferId];
          state.setIncomingFiles({...currentIncomingFiles});
          console.log(`[${transferId}] Cleaned up incoming file data.`);
@@ -331,11 +311,6 @@ export function handleIncomingFileEnd(payload) {
 
 // --- Utility / Cleanup ---
 
-// Function to potentially clean up blobs (needs careful implementation)
 export function cleanupFileBlobs() {
-    // Example: Iterate through completed file messages in the DOM
-    // Find elements with download URLs (e.g., a specific class or data attribute)
-    // Get the URL and revoke it if it hasn't been revoked yet.
-    // This requires tracking which URLs have been generated and possibly revoked.
     console.warn("cleanupFileBlobs() is not fully implemented. Potential memory leaks from Object URLs.");
 } 

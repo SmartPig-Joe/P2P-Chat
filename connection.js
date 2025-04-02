@@ -5,6 +5,7 @@ import * as ui from './ui.js';
 import * as crypto from './crypto.js';
 import * as fileTransfer from './fileTransfer.js';
 import * as dom from './dom.js'; // Needed for updating UI elements based on WS state
+import * as storage from './storage.js'; // Import storage module
 
 // --- WebSocket Logic ---
 
@@ -12,7 +13,7 @@ function sendSignalingMessage(payload) {
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
         try {
             const messageString = JSON.stringify(payload);
-            console.log("Sending signaling message:", payload);
+            // console.log("Sending signaling message:", payload); // Less verbose
             state.ws.send(messageString);
         } catch (e) {
             console.error("Failed to stringify or send signaling message:", e);
@@ -21,8 +22,6 @@ function sendSignalingMessage(payload) {
     } else {
         console.error("Cannot send signaling message: WebSocket is not connected.");
         ui.addSystemMessage("无法发送信令：WebSocket 未连接。", true);
-        // Should we attempt to reconnect or just inform the user?
-        // For now, just informing.
     }
 }
 
@@ -30,13 +29,12 @@ function handleWebSocketMessage(event) {
     let msg;
     try {
         msg = JSON.parse(event.data);
-        console.log("Received signaling message:", msg);
+        // console.log("Received signaling message:", msg); // Less verbose
     } catch (e) {
         console.error("Failed to parse signaling message:", event.data, e);
         return;
     }
 
-    // Basic validation
     if (!msg.type) {
          console.warn("Received signaling message without type:", msg);
          return;
@@ -107,15 +105,6 @@ function handleWebSocketMessage(event) {
             // Other errors might just be warnings or require specific handling
             break;
 
-        case 'user_disconnected':
-             if (msg.payload?.userId === state.remoteUserId) {
-                 console.log(`Signaling server indicated ${state.remoteUserId} disconnected.`);
-                 ui.addSystemMessage(`${state.remoteUserId} 已断开连接。`);
-                 resetConnection(); // Reset the P2P connection state
-             }
-            break;
-
-        // Example: Handle a potential 'busy' signal
         case 'busy':
              if (msg.from === state.remoteUserId) {
                  console.log(`${state.remoteUserId} is busy.`);
@@ -123,6 +112,20 @@ function handleWebSocketMessage(event) {
                  resetConnection(); // Reset the connection attempt state
              }
              break;
+
+        case 'user_disconnected':
+             if (msg.payload?.userId === state.remoteUserId) {
+                 console.log(`Signaling server indicated ${state.remoteUserId} disconnected.`);
+                 ui.addSystemMessage(`${state.remoteUserId} 已断开连接。`);
+                 const disconnectedPeerId = state.remoteUserId; // Store before reset
+                 resetConnection(); // Reset the P2P connection state
+                 ui.updateContactStatus(disconnectedPeerId); // Update UI after reset
+             } else if (msg.payload?.userId) {
+                 // If a user disconnects from the server who is in our contact list but not currently connected
+                 console.log(`Signaling server indicated ${msg.payload.userId} disconnected (was not connected peer).`);
+                 ui.updateContactStatus(msg.payload.userId);
+             }
+            break;
 
         // Example: Confirmation of registration
         // case 'register_confirm':
@@ -166,6 +169,8 @@ export function connectWebSocket() {
         // Enable the connect button and remote ID input now that WS is ready
         if (dom.connectButton) dom.connectButton.disabled = false;
         if (dom.remoteUserIdInput) dom.remoteUserIdInput.disabled = false;
+        // Update status for all contacts upon successful WS connection
+        storage.getAllPeerIds().then(ids => ids.forEach(id => ui.updateContactStatus(id)));
     };
 
     newWs.onmessage = handleWebSocketMessage;
@@ -181,6 +186,8 @@ export function connectWebSocket() {
         // Ensure buttons/inputs reflect the disconnected state
         if (dom.connectButton) dom.connectButton.disabled = true;
         if (dom.remoteUserIdInput) dom.remoteUserIdInput.disabled = true;
+        // Update status for all contacts upon WS error
+        storage.getAllPeerIds().then(ids => ids.forEach(id => ui.updateContactStatus(id)));
     };
 
     newWs.onclose = (event) => {
@@ -201,6 +208,8 @@ export function connectWebSocket() {
         // Ensure buttons/inputs reflect the disconnected state
         if (dom.connectButton) dom.connectButton.disabled = true;
         if (dom.remoteUserIdInput) dom.remoteUserIdInput.disabled = true;
+        // Update status for all contacts upon WS close
+        storage.getAllPeerIds().then(ids => ids.forEach(id => ui.updateContactStatus(id)));
     };
 }
 
@@ -309,6 +318,77 @@ function setupPeerConnectionEvents(pc) {
 
 }
 
+// --- History Loading ---
+
+/**
+ * Loads message history for the given peer from storage and displays it.
+ * @param {string} peerId The ID of the peer whose history should be loaded.
+ */
+export async function loadAndDisplayHistory(peerId) {
+    if (!peerId) return;
+    console.log(`Loading history for peer: ${peerId}`);
+    try {
+        const messages = await storage.getMessages(peerId);
+        console.log(`Retrieved ${messages.length} historical messages.`);
+
+        // Clear existing non-file messages in the UI before adding historical ones
+        ui.clearMessageList();
+
+        // Add historical messages to the UI
+        messages.forEach(msg => {
+            // Determine if it's a file message based on structure (e.g., has fileInfo)
+            // Assuming plain text messages don't have a transferId
+            if (msg.type === 'text' || !msg.transferId) {
+                ui.addP2PMessageToList(msg);
+            } else {
+                // It's likely a file message - need a way to render its final state
+                // Let's assume addFileMessageToList can handle rendering based on stored data
+                // We need to pass the correct arguments. Stored message might have fileInfo.
+                // We need to determine the final state (downloadUrl or progress=1)
+                // This part is tricky as the DB doesn't store the downloadUrl directly.
+                // For simplicity now, let's just render using addFileMessageToList
+                // assuming it can handle a stored file message structure.
+                // We might need to enhance storage or addFileMessageToList later.
+
+                // Simplified approach: Re-use addFileMessageToList. We assume progress 1 for sent, completed for received.
+                // This won't show download links correctly for history yet.
+                const isComplete = true; // Assume history items are complete
+                const progress = msg.isLocal ? 1 : (isComplete ? 1 : 0); // Simplification
+                const downloadUrl = null; // Cannot reconstruct blob URL from history
+
+                // Use addFileMessageToList to render the structure
+                // Note: createFileMessageHTML needs to be robust enough for this
+                ui.addFileMessageToList(msg, msg.isLocal, downloadUrl, progress);
+            }
+        });
+
+        // Attempt to render any icons that might have been missed or added during history load
+        // Use setTimeout to ensure this runs after the DOM has likely updated from the loop above
+        setTimeout(() => {
+            if (typeof lucide !== 'undefined' && lucide && typeof lucide.createIcons === 'function') {
+                try {
+                    console.log("Running lucide.createIcons on the message list after history load (delayed).");
+                    // Apply to the whole list container to catch all icons
+                    lucide.createIcons({ element: dom.messageList });
+                } catch (iconError) {
+                    console.error("Error calling lucide.createIcons after history load:", iconError);
+                }
+            } else {
+                console.warn("Lucide library not available after history load (delayed check), icons might not be rendered.");
+            }
+        }, 0); // Delay execution slightly
+
+        // Scroll to the bottom after loading history and potential icon rendering
+        ui.scrollToBottom();
+
+        console.log("History loaded and displayed.");
+
+    } catch (error) {
+        console.error(`Failed to load or display history for ${peerId}:`, error);
+        ui.addSystemMessage(`加载历史记录失败: ${error.message}`, true);
+    }
+}
+
 async function setupDataChannelEvents(channel) {
     if (!channel) return;
     console.log(`Setting up data channel: ${channel.label}, State: ${channel.readyState}, ID: ${channel.id}`);
@@ -350,6 +430,11 @@ async function setupDataChannelEvents(channel) {
                     console.log("E2EE established successfully! (onopen - peer key pre-received)");
                     ui.addSystemMessage("端到端加密已建立！可以开始聊天。");
                     ui.updateConnectionStatus(`已连接到 ${state.remoteUserId} (E2EE)`, 'success');
+                    ui.addContactToList(state.remoteUserId); // Ensure peer is in the list
+                    ui.updateContactStatus(state.remoteUserId); // Update status
+                    ui.updateChatInputVisibility(); // Update input based on connection & selection
+                    // History loading is now triggered by contact selection, not connection open.
+                    // await loadAndDisplayHistory(state.remoteUserId); // Removed from here
                 } else {
                      throw new Error("Shared key derivation failed.");
                 }
@@ -360,6 +445,7 @@ async function setupDataChannelEvents(channel) {
             console.error("Error during data channel open and key exchange setup:", error);
             ui.addSystemMessage(`加密设置失败: ${error.message}`, true);
             resetConnection();
+            ui.updateContactStatus(state.remoteUserId); // Update status after reset
             return; // Stop further processing on error
         }
 
@@ -416,8 +502,14 @@ async function setupDataChannelEvents(channel) {
                          const derivedKey = await crypto.deriveSharedKey(state.localKeyPair.privateKey, importedKey);
                          if (derivedKey) {
                              console.log("E2EE established successfully! (onmessage - public key received)");
+                            state.setSharedKey(derivedKey);
                             ui.addSystemMessage("端到端加密已建立！可以开始聊天。");
                             ui.updateConnectionStatus(`已连接到 ${state.remoteUserId} (E2EE)`, 'success');
+                            ui.addContactToList(state.remoteUserId); // Ensure peer is in the list
+                            ui.updateContactStatus(state.remoteUserId); // Update status
+                            ui.updateChatInputVisibility(); // Update input based on connection & selection
+                            // History loading is now triggered by contact selection, not connection open.
+                            // await loadAndDisplayHistory(state.remoteUserId); // Removed from here
                          } else {
                              throw new Error("Shared key derivation failed after receiving peer key.");
                          }
@@ -431,6 +523,7 @@ async function setupDataChannelEvents(channel) {
                      console.error("Error processing received public key or deriving shared key:", error);
                      ui.addSystemMessage(`处理对方公钥或建立加密失败: ${error.message}`, true);
                      resetConnection();
+                     ui.updateContactStatus(state.remoteUserId); // Update status after reset
                 }
                 break; // End publicKey case
 
@@ -453,8 +546,27 @@ async function setupDataChannelEvents(channel) {
                          console.warn("Decrypted chat payload has invalid format:", decryptedPayload);
                          throw new Error("Decrypted message format is incorrect.");
                     }
+
+                    // Prepare data for UI and storage
+                    const messageData = {
+                        ...decryptedPayload,      // Includes text and timestamp
+                        peerId: state.remoteUserId, // The sender of this message
+                        isLocal: false,            // This is a received message
+                        type: 'text'               // Message type (assuming text for now)
+                    };
+
                     // Add message to UI
-                    ui.addP2PMessageToList({ ...decryptedPayload, isLocal: false });
+                    ui.addP2PMessageToList(messageData);
+
+                    // Add received message to local storage AFTER UI update
+                    try {
+                        await storage.addMessage(messageData);
+                        // console.log('Received message saved to local storage.');
+                    } catch (storageError) {
+                        console.error("Failed to save received message to local storage:", storageError);
+                        // Non-critical error, log for now.
+                    }
+
                  } catch (error) {
                      console.error("Failed to decrypt chat message:", error);
                      ui.addSystemMessage("解密收到的消息失败！可能密钥不匹配或消息已损坏。", true);
@@ -498,7 +610,10 @@ async function setupDataChannelEvents(channel) {
              // --- File Transfer Metadata --- 
              case 'file-info':
                  console.log("Received file-info payload:", msgData.payload);
+                 // Add senderId to fileInfo so receiver knows who sent it
+                 msgData.payload.senderId = state.remoteUserId;
                  fileTransfer.handleIncomingFileInfo(msgData.payload);
+                 ui.addContactToList(state.remoteUserId); // Ensure sender is in contact list
                  break;
              case 'file-end':
                   console.log("Received file-end payload:", msgData.payload);
@@ -559,6 +674,7 @@ export function initiateCall(targetUserId) {
     ui.addSystemMessage(`正在尝试连接 ${state.remoteUserId}...`);
     ui.updateConnectionStatus(`呼叫 ${state.remoteUserId}...`, 'progress');
     state.setIsConnecting(true);
+    ui.addContactToList(targetUserId); // Add target to contacts immediately
 
     try {
         createPeerConnection(); // Create the RTCPeerConnection
@@ -595,12 +711,14 @@ export function initiateCall(targetUserId) {
                 console.error("Error creating or sending offer:", error);
                 ui.addSystemMessage(`创建或发送 Offer 失败: ${error.message}`, true);
                 resetConnection();
+                ui.updateContactStatus(state.remoteUserId); // Update status after reset
             });
 
     } catch (error) {
          console.error("Error initiating call:", error);
          ui.addSystemMessage(`呼叫发起失败: ${error.message}`, true);
          resetConnection();
+         ui.updateContactStatus(state.remoteUserId); // Update status after reset
     }
 }
 
@@ -644,11 +762,13 @@ function handleOffer(offerSdp) {
                 console.error("Error handling offer or creating/sending answer:", error);
                 ui.addSystemMessage(`处理 Offer 或创建 Answer 失败: ${error.message}`, true);
                 resetConnection();
+                ui.updateContactStatus(state.remoteUserId); // Update status after reset
             });
     } catch (error) {
          console.error("Error in handleOffer function:", error);
          ui.addSystemMessage(`处理连接请求失败: ${error.message}`, true);
          resetConnection();
+         ui.updateContactStatus(state.remoteUserId); // Update status after reset
     }
 }
 
@@ -673,6 +793,7 @@ function handleAnswer(answerSdp) {
             console.error("Error setting remote description (answer):", error);
             ui.addSystemMessage(`设置远程 Answer 失败: ${error.message}`, true);
             resetConnection();
+            ui.updateContactStatus(state.remoteUserId); // Update status after reset
         });
 }
 
@@ -710,6 +831,7 @@ function handleCandidate(candidate) {
 // This function now primarily resets the state and updates the UI.
 // It relies on the state module's resetConnectionState for actual cleanup.
 export function resetConnection() {
+    console.warn("!!!! Executing resetConnection !!!!"); // 添加警告日志
     console.log("Executing connection reset logic.");
 
     const previousRemoteUserId = state.resetConnectionState(); // Perform state cleanup
@@ -719,6 +841,7 @@ export function resetConnection() {
 
     if (previousRemoteUserId) {
         ui.addSystemMessage(`与 ${previousRemoteUserId} 的连接已断开/重置。`);
+        ui.updateContactStatus(previousRemoteUserId); // Update contact status indicator
     } else {
         // Avoid redundant message if WS just closed
         if (!state.ws) {
@@ -763,20 +886,28 @@ export function handleDisconnect() {
 
 // Example of exporting a function needed by other modules
 export async function sendEncryptedData(type, payload) {
+    console.log(`[Debug] sendEncryptedData called. Type: ${type}`, payload); // 添加日志
     if (!state.isConnected || !state.dataChannel || state.dataChannel.readyState !== 'open') {
-        throw new Error("Data channel not ready to send.");
+        const errorMsg = `Data channel not ready to send. isConnected: ${state.isConnected}, dataChannel exists: ${!!state.dataChannel}, state: ${state.dataChannel?.readyState}`; // 添加日志
+        console.error(`[Debug] sendEncryptedData: ${errorMsg}`);
+        throw new Error(errorMsg);
     }
     if (!state.sharedKey) {
-        throw new Error("Encryption key not available.");
+        const errorMsg = "Encryption key not available.";
+        console.error("[Debug] sendEncryptedData: Encryption key not available."); // 添加日志
+        throw new Error(errorMsg);
     }
 
     try {
+        console.log("[Debug] sendEncryptedData: Encrypting payload..."); // 添加日志
         const encryptedPayload = await crypto.encryptMessage(state.sharedKey, payload);
         const messageToSend = { type: type, payload: encryptedPayload };
+        console.log("[Debug] sendEncryptedData: Sending message over data channel...", messageToSend); // 添加日志
         state.dataChannel.send(JSON.stringify(messageToSend));
+        console.log(`[Debug] sendEncryptedData: Sent encrypted ${type} message successfully.`); // 添加日志
         // console.log(`Sent encrypted ${type} message.`); // Keep logging minimal for frequent ops
     } catch (error) {
-        console.error(`Failed to encrypt or send ${type} message:`, error);
+        console.error(`[Debug] sendEncryptedData: Failed to encrypt or send ${type} message:`, error); // 修改日志
         ui.addSystemMessage(`发送加密 ${type} 消息失败。`, true);
         throw error; // Re-throw for caller
     }

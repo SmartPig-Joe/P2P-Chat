@@ -1,7 +1,8 @@
 // dom.js
 
 // --- DOM 元素引用 ---
-export const channelLinks = document.querySelectorAll('.channel-link');
+// export const channelLinks = document.querySelectorAll('.channel-link'); // Removed
+export const contactsListContainer = document.getElementById('contacts-list-container'); // Added
 export const messageInput = document.getElementById('message-input');
 export const messageList = document.getElementById('message-list');
 export const channelNameHeader = document.getElementById('channel-name');
@@ -15,7 +16,13 @@ export const connectionStatusSpan = document.getElementById('connection-status')
 export const localUserIdSpan = document.getElementById('local-user-id');
 export const remoteUserIdInput = document.getElementById('remote-user-id-input');
 export const connectButton = document.getElementById('connect-button');
-export const chatInputArea = document.querySelector('.px-4.pb-4');
+// export const chatInputArea = document.querySelector('.px-4.pb-4'); // Old selector
+export const chatInputArea = document.querySelector('.chat-input-area'); // Updated selector
 export const uploadButton = document.getElementById('upload-button');
 export const fileInput = document.getElementById('file-input');
-export const emptyMessageListDiv = document.getElementById('empty-message-list'); 
+export const emptyMessageListDiv = document.getElementById('empty-message-list');
+// Add references for user info at bottom-left if needed for dynamic updates
+export const localUsernameSpan = document.querySelector('.local-username');
+export const localUserTagSpan = document.querySelector('.local-usertag');
+export const localUserAvatar = document.querySelector('.user-avatar-small');
+export const localUserStatusIndicator = document.querySelector('.user-status-indicator'); 
