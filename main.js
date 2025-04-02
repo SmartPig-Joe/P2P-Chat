@@ -12,8 +12,11 @@ import * as crypto from './crypto.js'; // Import crypto module
 
 // Handle Sending Text Messages
 function handleSendMessage(event) {
-    // Check if Enter key was pressed
-    if (event.type === 'keypress' && event.key !== 'Enter') return;
+    // Check if Enter key was pressed without Shift
+    if (event.type === 'keypress' && (event.key !== 'Enter' || event.shiftKey)) return;
+    if (event.type === 'keypress' && event.key === 'Enter') {
+        event.preventDefault(); // Prevent default newline behavior on Enter
+    }
 
     if (!dom.messageInput) {
         console.error('messageInput DOM element not found!');
@@ -25,29 +28,35 @@ function handleSendMessage(event) {
     // Stop typing indicator immediately if Enter is pressed
     if (event.type === 'keypress' && event.key === 'Enter') {
         stopLocalTypingIndicator(); // Stop indicator regardless of message content
-        if (messageText === '') {
-            return; // Don't send empty messages on Enter
-        }
+    }
+
+    if (messageText === '') {
+        if (event.type === 'keypress') dom.messageInput.value = ''; // Clear input if only whitespace on Enter
+        return; // Don't send empty messages
+    }
+
+    // Get the currently active peer
+    const activePeerId = state.getActiveChatPeerId();
+    if (!activePeerId) {
+        console.warn("Cannot send message: No active chat selected.");
+        ui.addSystemMessage("请先选择一个聊天对象。", null, true); // Use null peerId for global message
+        return;
     }
 
     // Check connection status specific to the selected peer
-    if (!state.isConnected || state.remoteUserId !== ui.getSelectedPeerId()) {
-         console.warn(`Cannot send message: Not connected to the selected peer (${ui.getSelectedPeerId()}). Connected to: ${state.remoteUserId}`);
-         ui.addSystemMessage("无法发送消息：未连接到当前选择的联系人。", true);
-         return;
-    }
+    const connectionState = state.getConnectionState(activePeerId);
+    const dataChannel = state.getDataChannel(activePeerId);
 
-    if (!state.sharedKey) {
-         console.warn(`Cannot send message: Shared key not established with ${ui.getSelectedPeerId()}.`);
-         ui.addSystemMessage("无法发送消息：端到端加密未就绪。", true);
+    if (connectionState !== 'connected' || !dataChannel || dataChannel.readyState !== 'open') {
+         console.warn(`Cannot send message: Not connected or data channel not open for peer ${activePeerId}. State: ${connectionState}, DC: ${dataChannel?.readyState}`);
+         ui.addSystemMessage(`无法发送消息：与 ${state.contacts[activePeerId]?.name || activePeerId} 的连接未建立或已断开。`, activePeerId, true); // Target message to active peer
          return;
     }
 
     // Proceed to send the message
     try {
-        connection.sendChatMessage(messageText); // Use the dedicated function from connection.js
-        dom.messageInput.value = '';
-        dom.messageInput.focus();
+        // connection.sendChatMessage calls ui.clearChatInput on success
+        connection.sendChatMessage(messageText);
     } catch (error) {
         console.error("Failed to send chat message:", error);
         // Error message is handled within sendChatMessage now
@@ -56,14 +65,20 @@ function handleSendMessage(event) {
 
 // Handle Local User Typing
 function handleLocalTyping() {
-    // Send typing indicator only if connected to the selected peer
-    if (!state.isConnected || state.remoteUserId !== ui.getSelectedPeerId() || !state.dataChannel || state.dataChannel.readyState !== 'open' || !state.sharedKey) {
+    const activePeerId = state.getActiveChatPeerId();
+    if (!activePeerId) return; // No active chat
+
+    const connectionState = state.getConnectionState(activePeerId);
+    const dataChannel = state.getDataChannel(activePeerId);
+
+    // Send typing indicator only if connected to the selected peer and channel is open
+    if (connectionState !== 'connected' || !dataChannel || dataChannel.readyState !== 'open') {
         return;
     }
 
     if (!state.isTyping) {
         state.setIsTyping(true);
-        connection.sendTypingIndicator(true); // Use connection.js function
+        connection.sendTypingIndicator(true); // Use connection.js function (sends to active peer)
     }
 
     // Clear the previous timer
@@ -82,9 +97,15 @@ function stopLocalTypingIndicator() {
         clearTimeout(state.typingTimeout);
         state.setTypingTimeout(null);
         state.setIsTyping(false);
-        // Send stopped typing only if still connected to the selected peer
-        if (state.isConnected && state.remoteUserId === ui.getSelectedPeerId() && state.dataChannel?.readyState === 'open' && state.sharedKey) {
-            connection.sendTypingIndicator(false); // Use connection.js function
+
+        const activePeerId = state.getActiveChatPeerId();
+        if (activePeerId) {
+             const connectionState = state.getConnectionState(activePeerId);
+             const dataChannel = state.getDataChannel(activePeerId);
+             // Send stopped typing only if still connected to the selected peer
+             if (connectionState === 'connected' && dataChannel?.readyState === 'open') {
+                 connection.sendTypingIndicator(false); // Use connection.js function (sends to active peer)
+             }
         }
     }
 }
@@ -92,31 +113,35 @@ function stopLocalTypingIndicator() {
 // Handle adding a new contact
 function handleAddContact() {
     console.log('[Debug] handleAddContact function entered.');
-    if (!dom.addContactInput || !dom.addContactButton) {
-        console.warn('[Debug] handleAddContact returning early: addContactInput or addContactButton not found.');
+    if (!dom.addContactInput) { // Removed check for button as Enter works too
+        console.warn('[Debug] handleAddContact returning early: addContactInput not found.');
         return;
     }
     const peerIdToAdd = dom.addContactInput.value.trim();
-    console.log(`[Debug] Attempting to add contact: "${peerIdToAdd}"`);
+    const contactName = dom.addContactNameInput?.value.trim() || null; // Optional name input
+    console.log(`[Debug] Attempting to add contact ID: "${peerIdToAdd}", Name: "${contactName}"`);
 
     if (!peerIdToAdd) {
-        ui.addSystemMessage("请输入要添加的 Peer ID。", true);
+        ui.addSystemMessage("请输入要添加的 Peer ID。", null, true); // Global system message
         return;
     }
 
     if (peerIdToAdd === state.localUserId) {
-         ui.addSystemMessage("不能添加自己为联系人。", true);
+         ui.addSystemMessage("不能添加自己为联系人。", null, true); // Global system message
          return;
     }
 
-    const success = state.addContact(peerIdToAdd);
+    const success = state.addContact(peerIdToAdd, contactName); // Pass name to state function
     if (success) {
-        ui.addSystemMessage(`联系人 ${peerIdToAdd} 已添加。`);
-        ui.renderContactList(); // Re-render the list
-        dom.addContactInput.value = ''; // Clear input
+        // Display confirmation message - maybe global or specific to a settings area if exists
+        // ui.addSystemMessage(`联系人 ${state.contacts[peerIdToAdd]?.name || peerIdToAdd} 已添加/更新。`);
+        console.log(`Contact ${peerIdToAdd} added/updated successfully.`);
+        ui.renderContactList(); // Re-render the list to show the new/updated contact
+        dom.addContactInput.value = ''; // Clear ID input
+        if (dom.addContactNameInput) dom.addContactNameInput.value = ''; // Clear name input
     } else {
-        // Error message handled within state.addContact (e.g., invalid ID)
-         ui.addSystemMessage(`无法添加联系人 ${peerIdToAdd}。`, true); // Generic fallback
+        // Error messages should ideally be more specific from state.addContact if possible
+         ui.addSystemMessage(`无法添加联系人 ${peerIdToAdd}。ID可能无效或已存在。`, null, true); // Generic fallback
     }
 }
 
@@ -171,15 +196,12 @@ async function initializeApp() {
         console.log("Database initialized successfully.");
     } catch (error) {
         console.error("Failed to initialize database:", error);
-        ui.addSystemMessage("错误：无法初始化本地存储。聊天记录可能不会被保存。", true);
+        ui.addSystemMessage("错误：无法初始化本地存储。聊天记录可能不会被保存。", null, true); // Global message
     }
 
-    // 2. Load State & Initial UI Setup (Depends on crypto potentially, but usually loads IDs/contacts)
+    // 2. Load State & Initial UI Setup
     state.loadContacts(); // Load contacts from localStorage
-    ui.displayLocalUserInfo(); // Display local user ID/name/avatar
-    ui.renderContactList(); // Render the initial contact list
-    ui.updateEmptyState(); // Show initial empty state
-    ui.populateMemberList(); // Initial population of member list (if used)
+    ui.initializeUI(); // Call the consolidated UI initializer (this calls renderContactList, etc.)
 
     // 3. Setup Event Listeners
     console.log('[Debug] Value of dom.addContactButton before check:', dom.addContactButton);
@@ -200,6 +222,14 @@ async function initializeApp() {
              }
          });
     }
+    // Also listen for Enter in Name input if it exists
+    if (dom.addContactNameInput) {
+        dom.addContactNameInput.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter') {
+                handleAddContact();
+            }
+        });
+    }
 
     // Message Input
     if (dom.messageInput) {
@@ -217,23 +247,14 @@ async function initializeApp() {
         console.warn("Upload button or file input not found");
     }
 
-    // Member List Toggle (REMOVED - Functionality not currently used)
-    // // if (dom.memberListToggleButton) {
-    // //     dom.memberListToggleButton.addEventListener('click', ui.toggleMemberList);
-    // // } else {
-    // //     console.warn("Member list toggle button not found");
-    // // }
-
-    // Note: Contact click listener is now added *within* ui.renderContactList
-
-    // 3. Connect WebSocket to Signaling Server
+    // 4. Connect WebSocket to Signaling Server
     // Connect WebSocket regardless of crypto state, maybe server provides other info?
     connection.connectWebSocket();
 
     // Update UI based on crypto readiness
     if (cryptoReady) {
-         // Clear loading message and show default empty state
-         ui.updateEmptyState();
+         // Clear loading message and show default empty state (now handled in initializeUI)
+         // ui.updateEmptyState(); // Called within initializeUI
          console.log("Application Initialization Complete.");
          // Input remains hidden until a contact is selected and connected via ui.updateChatInputVisibility calls elsewhere
     } else {

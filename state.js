@@ -8,15 +8,12 @@ const CONTACTS_STORAGE_KEY = 'p2pChatContacts'; // Key for contacts in localStor
 function initializeLocalUserId() {
     let userId = localStorage.getItem(LOCAL_USER_ID_KEY);
     if (!userId) {
-        // Generate a new ID if none exists
         userId = `user-${Math.random().toString(36).substring(2, 8)}`;
         try {
-            // Save the newly generated ID to localStorage
             localStorage.setItem(LOCAL_USER_ID_KEY, userId);
             console.log('Generated and saved new local user ID:', userId);
         } catch (e) {
             console.error('Failed to save local user ID to localStorage:', e);
-            // Proceed with the generated ID even if saving failed
         }
     } else {
         console.log('Retrieved local user ID from localStorage:', userId);
@@ -24,87 +21,217 @@ function initializeLocalUserId() {
     return userId;
 }
 
-// --- WebRTC & WebSocket Globals ---
-export let ws = null;
-export let peerConnection = null;
-export let dataChannel = null;
-// Initialize localUserId using the function
-export let localUserId = initializeLocalUserId();
-export let remoteUserId = null;
-export let isConnected = false;
-export let isConnecting = false;
+// --- Global State ---
+export let ws = null; // Single WebSocket connection
+export const localUserId = initializeLocalUserId(); // Unique ID for this client
+export let localKeyPair = null; // Cryptographic key pair for this client
+export let contacts = {}; // { peerId: { id: string, name: string, online: boolean | 'connecting' } }
+export let activeChatPeerId = null; // Which peer's chat window is currently active
 
-// --- Contact List State ---
-export let contacts = {}; // { peerId: { id: string, name: string, online: boolean } }
+// --- Per-Peer State (Managed via Dictionaries/Maps) ---
+const peerConnections = new Map(); // Map<peerId, RTCPeerConnection>
+const dataChannels = new Map(); // Map<peerId, RTCDataChannel>
+const connectionStates = new Map(); // Map<peerId, 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'>
+const peerKeys = new Map(); // Map<peerId, { sharedKey: CryptoKey, peerPublicKey: CryptoKey }> // Store crypto keys per peer
+const peerTypingStatus = new Map(); // Map<peerId, boolean>
+const makingOfferFlags = new Map(); // Map<peerId, boolean> // True if we are initiating offer to peerId
+const connectionTimeouts = new Map(); // Map<peerId, number> // Store setTimeout IDs
 
-// --- Crypto State ---
-export let localKeyPair = null;
-export let sharedKey = null;
-export let peerPublicKey = null;
-
-// --- Typing Indicator State ---
-export let typingTimeout = null;
+// --- Typing Indicator State (Local User) ---
+export let typingTimeout = null; // Timeout for sending local "stopped typing" indicator
 export let isTyping = false; // Track if *local* user is typing
-export let peerIsTyping = false; // Track if *remote* user is typing
 
-// --- File Transfer State ---
-export let incomingFiles = {}; // Store incoming file chunks { transferId: { info: {}, chunks: [], receivedSize: 0 } }
+// --- File Transfer State (Consider if needs per-peer isolation later) ---
+export let incomingFiles = {}; // Store incoming file chunks { transferId: { info: {}, chunks: [], receivedSize: 0, peerId: string } }
 
-// --- Functions to update state ---
+
+// --- Functions to update global state ---
 export function setWs(newWs) { ws = newWs; }
-export function setPeerConnection(newPc) { peerConnection = newPc; }
-export function setDataChannel(newDc) { dataChannel = newDc; }
-export function setRemoteUserId(newId) { remoteUserId = newId; }
-export function setIsConnected(status) { isConnected = status; }
-export function setIsConnecting(status) { isConnecting = status; }
-export function setContacts(newContacts) { contacts = newContacts; }
 export function setLocalKeyPair(keyPair) { localKeyPair = keyPair; }
-export function setSharedKey(key) { sharedKey = key; }
-export function setPeerPublicKey(key) { peerPublicKey = key; }
+export function setContacts(newContacts) { contacts = newContacts; }
+export function setActiveChat(peerId) {
+    activeChatPeerId = peerId;
+    console.log(`Active chat set to: ${peerId}`);
+    // Optionally clear typing status for the new active chat immediately?
+    setPeerIsTyping(peerId, false);
+}
+export function getActiveChatPeerId() { return activeChatPeerId; }
+export function isActiveChat(peerId) { return activeChatPeerId === peerId; }
 export function setTypingTimeout(timeoutId) { typingTimeout = timeoutId; }
 export function setIsTyping(status) { isTyping = status; }
-export function setPeerIsTyping(status) { peerIsTyping = status; }
-export function setIncomingFiles(files) { incomingFiles = files; }
+export function setIncomingFiles(files) { incomingFiles = files; } // Keep for now, may need rework
 
-// --- Contact Management Functions ---
+// --- Functions to manage Per-Peer State ---
+
+// Peer Connections
+export function getPeerConnection(peerId) { return peerConnections.get(peerId); }
+export function setPeerConnection(peerId, pc) { peerConnections.set(peerId, pc); }
+export function removePeerConnection(peerId) { peerConnections.delete(peerId); }
+
+// Data Channels
+export function getDataChannel(peerId) { return dataChannels.get(peerId); }
+export function setDataChannel(peerId, dc) { dataChannels.set(peerId, dc); }
+export function removeDataChannel(peerId) { dataChannels.delete(peerId); }
+
+// Connection States (Consolidated)
+export function getConnectionState(peerId) { return connectionStates.get(peerId) || 'new'; } // Default to 'new' if unknown
+export function updateConnectionState(peerId, state) {
+    console.log(`Updating connection state for ${peerId} to ${state}`);
+    connectionStates.set(peerId, state);
+    // Update contact online status based on connection state
+    let onlineStatus;
+    switch (state) {
+        case 'connected':
+             // Only truly 'online' if data channel is also open
+            const dc = getDataChannel(peerId);
+             onlineStatus = (dc && dc.readyState === 'open') ? true : 'connecting';
+            break;
+        case 'connecting':
+            onlineStatus = 'connecting';
+            break;
+        case 'new':
+        case 'disconnected':
+        case 'failed':
+        case 'closed':
+        default:
+            onlineStatus = false;
+            break;
+    }
+     updateContactStatus(peerId, onlineStatus); // Update visual status
+}
+
+// Helper for connection.js checks
+export function isPeerConnectionActiveOrPending(peerId) {
+    const state = getConnectionState(peerId);
+    return state === 'connected' || state === 'connecting';
+}
+
+// Crypto Keys (Per Peer)
+export function getPeerKeys(peerId) { return peerKeys.get(peerId); }
+export function setPeerKeys(peerId, keys) { peerKeys.set(peerId, keys); }
+export function removePeerKeys(peerId) { peerKeys.delete(peerId); }
+
+// Peer Typing Status
+export function getPeerIsTyping(peerId) { return peerTypingStatus.get(peerId) || false; }
+export function setPeerIsTyping(peerId, status) { peerTypingStatus.set(peerId, status); }
+export function removePeerTypingStatus(peerId) { peerTypingStatus.delete(peerId); }
+
+// Offer Flags
+export function isMakingOffer(peerId) { return makingOfferFlags.get(peerId) || false; }
+export function setIsMakingOffer(peerId, status) { makingOfferFlags.set(peerId, status); }
+export function removeMakingOfferFlag(peerId) { makingOfferFlags.delete(peerId); }
+// Helper for checking if we expect an answer
+export function isExpectingAnswerFrom(peerId) { return isMakingOffer(peerId); }
+
+// Connection Timeouts
+export function setConnectionTimeout(peerId, timeoutId) { connectionTimeouts.set(peerId, timeoutId); }
+export function clearConnectionTimeout(peerId) {
+    const timeoutId = connectionTimeouts.get(peerId);
+    if (timeoutId) {
+        clearTimeout(timeoutId);
+        connectionTimeouts.delete(peerId);
+    }
+}
+
+// --- State Update Functions (Called by connection.js event handlers) ---
+// These can call updateConnectionState or update contact status directly
+
+export function updateIceConnectionState(peerId, iceState) {
+    console.log(`ICE state for ${peerId}: ${iceState}`);
+    // We might use the overall pc.connectionState more, but can track ICE state if needed
+    // Example: If ICE fails, directly update overall state
+    if (iceState === 'failed') {
+        updateConnectionState(peerId, 'failed');
+    } else if (iceState === 'closed' || iceState === 'disconnected') {
+         // If already connected, mark as disconnected, otherwise could be failed/closed setup
+         if (getConnectionState(peerId) === 'connected') {
+             updateConnectionState(peerId, 'disconnected');
+         } else if (getConnectionState(peerId) !== 'failed' && getConnectionState(peerId) !== 'closed'){
+             updateConnectionState(peerId, iceState); // Reflect closed/disconnected early if not yet connected
+         }
+    }
+    // Note: 'connected' and 'completed' ICE states don't guarantee usability, wait for overall state or data channel
+}
+
+export function updateOverallConnectionState(peerId, overallState) {
+    console.log(`Overall connection state for ${peerId}: ${overallState}`);
+    updateConnectionState(peerId, overallState);
+}
+
+export function updateSignalingState(peerId, signalingState) {
+    console.log(`Signaling state for ${peerId}: ${signalingState}`);
+    if (signalingState === 'closed') {
+        // Ensure connection state reflects closure if not already failed/disconnected
+        const currentState = getConnectionState(peerId);
+        if (currentState !== 'failed' && currentState !== 'disconnected' && currentState !== 'closed') {
+             updateConnectionState(peerId, 'closed');
+        }
+    }
+    // Can track signaling state specifically if needed: signalingStates.set(peerId, signalingState);
+}
+
+export function updateDataChannelState(peerId, dcState) {
+     console.log(`Data channel state for ${peerId}: ${dcState}`);
+     if (dcState === 'open') {
+         // If overall connection is also 'connected', mark as fully online
+         if (getConnectionState(peerId) === 'connected') {
+             updateContactStatus(peerId, true); // Now truly online
+         }
+     } else if (dcState === 'closed') {
+         // If data channel closes, consider the connection closed/disconnected
+          const currentState = getConnectionState(peerId);
+          if (currentState !== 'failed' && currentState !== 'disconnected' && currentState !== 'closed') {
+             updateConnectionState(peerId, 'closed'); // Treat DC close as connection end
+         }
+     }
+     // Can track DC state specifically if needed: dataChannelStates.set(peerId, dcState);
+}
+
+
+// --- Contact Management Functions (Modified) ---
 
 export function loadContacts() {
     try {
         const storedContacts = localStorage.getItem(CONTACTS_STORAGE_KEY);
         if (storedContacts) {
             const parsedContacts = JSON.parse(storedContacts);
-            // Ensure all loaded contacts have the 'online' property (default to false)
+            const validatedContacts = {};
             Object.values(parsedContacts).forEach(contact => {
-                if (contact.online === undefined) {
-                    contact.online = false;
-                }
-                 // Use ID as default name if name is missing
-                if (!contact.name) {
-                    contact.name = contact.id;
+                if (contact && contact.id) { // Basic validation
+                     validatedContacts[contact.id] = {
+                        id: contact.id,
+                        name: contact.name || contact.id, // Default name to ID
+                        online: false // ALWAYS initialize as offline on load
+                    };
                 }
             });
-            setContacts(parsedContacts);
-            console.log("Loaded contacts from localStorage:", contacts);
+            setContacts(validatedContacts);
+            console.log("Loaded contacts from localStorage (status reset to offline):", contacts);
         } else {
             console.log("No contacts found in localStorage.");
-            setContacts({}); // Initialize empty if nothing is stored
+            setContacts({});
         }
     } catch (e) {
         console.error("Failed to load contacts from localStorage:", e);
-        setContacts({}); // Reset to empty on error
+        setContacts({});
     }
 }
 
 export function saveContacts() {
     try {
-        localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
-        console.log("Saved contacts to localStorage:", contacts);
+        // Only save ID and name, not transient online status
+        const contactsToSave = {};
+        Object.values(contacts).forEach(contact => {
+            contactsToSave[contact.id] = { id: contact.id, name: contact.name };
+        });
+        localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contactsToSave));
+        console.log("Saved contacts (ID and name only) to localStorage:", contactsToSave);
     } catch (e) {
         console.error("Failed to save contacts to localStorage:", e);
     }
 }
 
-export function addContact(peerId) {
+export function addContact(peerId, name = null) { // Allow setting name on add
     if (!peerId || typeof peerId !== 'string' || peerId.trim() === '') {
         console.warn("Attempted to add invalid peer ID:", peerId);
         return false;
@@ -116,36 +243,127 @@ export function addContact(peerId) {
     }
     if (contacts[trimmedId]) {
         console.log(`Contact ${trimmedId} already exists.`);
-        return true; // Already exists, consider it a success
+        // Optionally update name if provided?
+        if (name && contacts[trimmedId].name !== name) {
+             contacts[trimmedId].name = name;
+             saveContacts();
+             // TODO: Need UI update for name change
+             // ui.updateContactName(trimmedId, name);
+        }
+        return true;
     }
     const newContact = {
         id: trimmedId,
-        name: trimmedId, // Default name to ID, can be changed later
+        name: name || trimmedId, // Use provided name or default to ID
         online: false    // Initially offline
     };
     const updatedContacts = { ...contacts, [trimmedId]: newContact };
     setContacts(updatedContacts);
-    saveContacts(); // Save immediately after adding
+    saveContacts();
     console.log(`Added new contact: ${trimmedId}`);
+    // TODO: Need UI update to add contact to list
+    // ui.addContactToList(newContact);
     return true;
 }
 
-export function updateContactStatus(peerId, isOnline) {
-    if (contacts[peerId]) {
-        const updatedContact = { ...contacts[peerId], online: isOnline };
+export function updateContactStatus(peerId, status) { // status: boolean | 'connecting'
+    if (!contacts[peerId]) {
+         // If status update is for an unknown peer, maybe add them? Or ignore.
+         console.log(`Received status update for non-contact: ${peerId}. Status: ${status}`);
+         // Option: Add the contact temporarily if they are connecting/connected
+         // if (status === 'connecting' || status === true) {
+         //    addContact(peerId); // Adds with ID as name, marks offline initially
+         // } else {
+             return; // Ignore status updates for non-contacts otherwise
+         // }
+         // For now, only update known contacts
+         return;
+    }
+
+    if (contacts[peerId].online !== status) {
+        const updatedContact = { ...contacts[peerId], online: status };
         const updatedContacts = { ...contacts, [peerId]: updatedContact };
         setContacts(updatedContacts);
-        // Note: We don't save to localStorage here, as status is transient.
-        // Status will be reset to offline on next load unless re-established.
-        console.log(`Updated status for ${peerId}: ${isOnline ? 'online' : 'offline'}`);
-    } else {
-         // This might happen if a connection occurs with a non-saved contact (e.g., direct link)
-         // Optionally add them temporarily or ignore
-         console.log(`Received status update for non-contact: ${peerId}`);
+        // No saving here, status is transient.
+        console.log(`Updated status for ${peerId}: ${status}`);
+         // UI update should be triggered by the caller (e.g., updateConnectionState)
+         // Or called directly here: ui.updateContactStatusUI(peerId, status);
     }
 }
 
-// Function to reset parts of the state related to a connection
+// --- Reset Functions ---
+
+// Reset state for a *specific* peer
+export function resetPeerState(peerId) {
+    if (!peerId) return;
+    console.log(`Resetting all state for peer: ${peerId}`);
+
+    // Get PC and DC before removing from maps
+    const pc = getPeerConnection(peerId);
+    const dc = getDataChannel(peerId);
+
+    // Close connections
+    if (dc) {
+        try { dc.close(); } catch (e) { console.warn(`Error closing data channel for ${peerId}:`, e); }
+    }
+    if (pc) {
+        try { pc.close(); } catch (e) { console.warn(`Error closing PeerConnection for ${peerId}:`, e); }
+    }
+
+    // Clear state maps
+    removePeerConnection(peerId);
+    removeDataChannel(peerId);
+    connectionStates.delete(peerId);
+    removePeerKeys(peerId);
+    removePeerTypingStatus(peerId);
+    removeMakingOfferFlag(peerId);
+    clearConnectionTimeout(peerId); // Ensure timeout is cleared
+
+    // Update contact status to offline
+    updateContactStatus(peerId, false);
+
+    // If this was the active chat, clear it
+    if (isActiveChat(peerId)) {
+        setActiveChat(null);
+    }
+
+     console.log(`Finished resetting state for ${peerId}`);
+}
+
+// Reset state for *all* peers (e.g., on WebSocket disconnect)
+export function resetAllConnections() {
+     console.log("Resetting all peer connections and states.");
+     const peerIds = Array.from(peerConnections.keys()); // Get all peers we had connections for
+     peerIds.forEach(peerId => {
+         resetPeerState(peerId);
+     });
+     // Also clear any other potentially relevant global state if needed
+     setIncomingFiles({}); // Clear file transfer state
+     console.log("Finished resetting all connections.");
+}
+
+
+// REMOVE OLD Single-Connection state variables and reset function
+/*
+export let peerConnection = null;
+export let dataChannel = null;
+export let remoteUserId = null;
+export let isConnected = false;
+export let isConnecting = false;
+export let sharedKey = null;
+export let peerPublicKey = null;
+export let peerIsTyping = false; // Track if *remote* user is typing
+
+export function setPeerConnection(newPc) { peerConnection = newPc; }
+export function setDataChannel(newDc) { dataChannel = newDc; }
+export function setRemoteUserId(newId) { remoteUserId = newId; }
+export function setIsConnected(status) { isConnected = status; }
+export function setIsConnecting(status) { isConnecting = status; }
+export function setSharedKey(key) { sharedKey = key; }
+export function setPeerPublicKey(key) { peerPublicKey = key; }
+export function setPeerIsTyping(status) { peerIsTyping = status; }
+
+// OLD reset function - replaced by resetPeerState(peerId) and resetAllConnections()
 export function resetConnectionState() {
     if (dataChannel) {
         try { dataChannel.close(); } catch (e) { console.warn("Error closing data channel:", e); }
@@ -161,10 +379,10 @@ export function resetConnectionState() {
     setIsConnecting(false);
     setSharedKey(null);
     setPeerPublicKey(null);
-    clearTimeout(typingTimeout);
-    setTypingTimeout(null);
-    setIsTyping(false);
-    setPeerIsTyping(false);
+    clearTimeout(typingTimeout); // Keep local typing timeout clear logic maybe? -> No, handled globally
+    // setTypingTimeout(null); // Handled globally
+    // setIsTyping(false); // Handled globally
+    setPeerIsTyping(false); // Remove this
     setIncomingFiles({});
 
     // Update the status of the previously connected peer to offline
@@ -173,7 +391,6 @@ export function resetConnectionState() {
         // Note: UI update for this status change should be triggered separately if needed
     }
 
-    return previousRemoteUserId;
+    return previousRemoteUserId; // No longer needed
 }
-
-// ... 其他状态管理逻辑 ... 
+*/ 

@@ -33,97 +33,87 @@ function handleWebSocketMessage(event) {
         return;
     }
 
-    if (!msg.type) {
-         console.warn("Received signaling message without type:", msg);
+    if (!msg.type || !msg.from) {
+         console.warn("Received signaling message without type or origin:", msg);
          return;
     }
 
+    const peerId = msg.from;
+
     switch (msg.type) {
         case 'offer':
-            if (state.isConnected || state.isConnecting) {
-                console.warn(`Ignoring offer from ${msg.from}, already connected/connecting to ${state.remoteUserId}`);
-                sendSignalingMessage({ type: 'busy', payload: { targetUserId: msg.from } });
+            if (!msg.payload?.sdp) {
+                console.warn(`Invalid offer received from ${peerId}:`, msg);
                 return;
             }
-            if (!msg.from || !msg.payload?.sdp) {
-                console.warn("Invalid offer received:", msg);
-                return;
-            }
-            const offererId = msg.from;
-            state.setRemoteUserId(offererId); // Tentatively set remote user
-            state.setIsConnecting(true);
-            console.log(`Received offer from ${offererId}`);
-            ui.addSystemMessage(`收到来自 ${state.contacts[offererId]?.name || offererId} 的连接请求...`);
-            // Update the contact's UI to indicate connection attempt (visual only, status remains offline)
-            // We don't set status to online yet, just indicate activity.
-            // The handleOffer function below will create the peer connection.
-            handleOffer(msg.payload.sdp);
+            console.log(`Received offer from ${peerId}`);
+            ui.addSystemMessage(`收到来自 ${state.contacts[peerId]?.name || peerId} 的连接请求...`, peerId);
+            handleOffer(peerId, msg.payload.sdp);
             break;
 
         case 'answer':
-            if (!msg.from || msg.from !== state.remoteUserId) {
-                console.warn(`Received answer from unexpected peer ${msg.from}. Current remote: ${state.remoteUserId}. Ignoring.`);
+            if (!state.isExpectingAnswerFrom(peerId)) {
+                console.warn(`Received answer from unexpected peer ${peerId}. Ignoring.`);
                 return;
             }
              if (!msg.payload?.sdp) {
-                console.warn("Invalid answer received:", msg);
+                console.warn(`Invalid answer received from ${peerId}:`, msg);
                 return;
             }
-            console.log(`Received answer from ${state.remoteUserId}`);
-            handleAnswer(msg.payload.sdp);
+            console.log(`Received answer from ${peerId}`);
+            handleAnswer(peerId, msg.payload.sdp);
             break;
 
         case 'candidate':
-            if (!msg.from || (state.remoteUserId && msg.from !== state.remoteUserId)) {
-                 console.warn(`Received candidate from unexpected peer ${msg.from}. Current remote: ${state.remoteUserId}. Ignoring.`);
+            if (!state.isPeerConnectionActiveOrPending(peerId)) {
+                 console.warn(`Received candidate from unexpected peer ${peerId}. Ignoring.`);
                  return;
             }
             if (!msg.payload?.candidate) {
-                console.warn("Invalid candidate received:", msg);
+                console.warn(`Invalid candidate received from ${peerId}:`, msg);
                 return;
             }
-            console.log(`Received ICE candidate from ${msg.from}`);
-            handleCandidate(msg.payload.candidate);
+            console.log(`Received ICE candidate from ${peerId}`);
+            handleCandidate(peerId, msg.payload.candidate);
             break;
 
         case 'error':
             const errorMsg = msg.payload?.message || '未知错误';
-            console.error(`Received error from signaling server: ${errorMsg}`);
-            ui.addSystemMessage(`信令服务器错误: ${errorMsg}`, true);
+            const targetPeerIdOnError = msg.payload?.targetUserId || peerId;
+            console.error(`Received error from signaling server regarding ${targetPeerIdOnError}: ${errorMsg}`);
+            ui.addSystemMessage(`信令服务器错误 (${state.contacts[targetPeerIdOnError]?.name || targetPeerIdOnError}): ${errorMsg}`, targetPeerIdOnError, true);
+
             if (errorMsg.includes("not found") || errorMsg.includes("offline")) {
-                 const targetPeer = state.remoteUserId; // Store before resetting
-                 ui.addSystemMessage(`目标用户 ${state.contacts[targetPeer]?.name || targetPeer || ''} 未找到或离线。`, true);
-                 resetConnection();
-                 if (targetPeer) {
-                     state.updateContactStatus(targetPeer, false); // Ensure state is offline
-                     ui.updateContactStatusUI(targetPeer, false); // Update UI
-                 }
+                 ui.addSystemMessage(`目标用户 ${state.contacts[targetPeerIdOnError]?.name || targetPeerIdOnError} 未找到或离线。`, targetPeerIdOnError, true);
+                 resetPeerConnection(targetPeerIdOnError);
+                 state.updateContactStatus(targetPeerIdOnError, false);
+                 ui.updateContactStatusUI(targetPeerIdOnError, false);
+            } else {
+                 resetPeerConnection(targetPeerIdOnError);
+                 state.updateContactStatus(targetPeerIdOnError, false);
+                 ui.updateContactStatusUI(targetPeerIdOnError, false);
             }
             break;
 
         case 'busy':
-             if (msg.from === state.remoteUserId) {
-                 const busyPeer = state.remoteUserId;
-                 console.log(`${busyPeer} is busy.`);
-                 ui.addSystemMessage(`${state.contacts[busyPeer]?.name || busyPeer} 当前正忙，请稍后再试。`, true);
-                 resetConnection(); // Reset the connection attempt state
-                 state.updateContactStatus(busyPeer, false);
-                 ui.updateContactStatusUI(busyPeer, false);
-             }
+             const busyPeerId = peerId;
+             console.log(`Peer ${busyPeerId} is busy.`);
+             ui.addSystemMessage(`${state.contacts[busyPeerId]?.name || busyPeerId} 当前正忙，请稍后再试。`, busyPeerId, true);
+             resetPeerConnection(busyPeerId);
+             state.updateContactStatus(busyPeerId, false);
+             ui.updateContactStatusUI(busyPeerId, false);
              break;
 
-        case 'user_disconnected': // Server indicates a user left the signaling server
+        case 'user_disconnected':
              const disconnectedUserId = msg.payload?.userId;
              if (disconnectedUserId) {
                  console.log(`Signaling server indicated ${disconnectedUserId} disconnected.`);
-                 if (disconnectedUserId === state.remoteUserId) {
-                     ui.addSystemMessage(`${state.contacts[disconnectedUserId]?.name || disconnectedUserId} 已断开连接。`);
-                     resetConnection(); // Reset the P2P connection state
-                 } else if (state.contacts[disconnectedUserId]) {
-                    // User was in contacts but not actively connected, update their status
-                    state.updateContactStatus(disconnectedUserId, false);
-                    ui.updateContactStatusUI(disconnectedUserId, false);
+                 if (state.isPeerConnectionActiveOrPending(disconnectedUserId)) {
+                     ui.addSystemMessage(`与 ${state.contacts[disconnectedUserId]?.name || disconnectedUserId} 的连接已断开。`, disconnectedUserId);
+                     resetPeerConnection(disconnectedUserId);
                  }
+                 state.updateContactStatus(disconnectedUserId, false);
+                 ui.updateContactStatusUI(disconnectedUserId, false);
              }
             break;
 
@@ -158,13 +148,12 @@ export function connectWebSocket() {
         console.error("WebSocket error:", error);
         ui.addSystemMessage("无法连接到信令服务器，请检查服务器状态和网络连接。", true);
         state.setWs(null);
-        resetConnection(); // Also reset P2P state if WS fails
-        // Update all contacts to offline
+        resetConnection();
         Object.keys(state.contacts).forEach(peerId => {
              state.updateContactStatus(peerId, false);
              ui.updateContactStatusUI(peerId, false);
         });
-         ui.updateChatInputVisibility(); // Replace updateGeneralConnectionUI
+         ui.updateChatInputVisibility();
     };
 
     newWs.onclose = (event) => {
@@ -175,650 +164,602 @@ export function connectWebSocket() {
         }
 
         state.setWs(null);
-        resetConnection(); // Reset P2P state when WS closes
-         // Update all contacts to offline
+        resetConnection();
          Object.keys(state.contacts).forEach(peerId => {
              state.updateContactStatus(peerId, false);
              ui.updateContactStatusUI(peerId, false);
         });
-        ui.updateChatInputVisibility(); // Replace updateGeneralConnectionUI
+        ui.updateChatInputVisibility();
     };
 }
 
 // --- WebRTC Logic ---
 
-function createPeerConnection() {
-    if (state.peerConnection) {
-        console.log("Closing existing PeerConnection before creating new one.");
-        try {
-            state.peerConnection.close();
-        } catch (e) { console.warn("Error closing existing PeerConnection:", e); }
-        state.setPeerConnection(null);
-    }
+function createPeerConnection(peerId) {
+    console.log(`Attempting to create PeerConnection for peer: ${peerId}`);
 
     console.log("Creating new PeerConnection with config:", PEER_CONNECTION_CONFIG);
     try {
         const newPc = new RTCPeerConnection(PEER_CONNECTION_CONFIG);
-        state.setPeerConnection(newPc);
-        setupPeerConnectionEvents(newPc);
-        return newPc; // Return the created connection
+        state.setPeerConnection(peerId, newPc);
+        setupPeerConnectionEvents(peerId, newPc);
+        return newPc;
     } catch (e) {
-        console.error("Failed to create PeerConnection:", e);
-        const targetPeer = state.remoteUserId; // Store before resetting
-        ui.addSystemMessage("创建 PeerConnection 失败。", true);
-        resetConnection();
-         if (targetPeer) {
-             state.updateContactStatus(targetPeer, false);
-             ui.updateContactStatusUI(targetPeer, false);
-         }
-        throw new Error("PeerConnection creation failed");
+        console.error(`Failed to create PeerConnection for ${peerId}:`, e);
+        ui.addSystemMessage(`创建与 ${state.contacts[peerId]?.name || peerId} 的 PeerConnection 失败。`, peerId, true);
+        resetPeerConnection(peerId);
+        state.updateContactStatus(peerId, false);
+        ui.updateContactStatusUI(peerId, false);
+        return null;
     }
 }
 
-function setupPeerConnectionEvents(pc) {
+function setupPeerConnectionEvents(peerId, pc) {
     pc.onicecandidate = (event) => {
-        if (event.candidate && state.remoteUserId) {
-            console.log(`Generated ICE candidate for ${state.remoteUserId}`);
+        if (event.candidate) {
+            console.log(`Generated ICE candidate for ${peerId}`);
             const candidateMsg = {
                 type: 'candidate',
                 payload: {
-                    targetUserId: state.remoteUserId,
+                    targetUserId: peerId,
                     candidate: event.candidate
                 }
             };
             sendSignalingMessage(candidateMsg);
-        } else if (!event.candidate) {
-            console.log("ICE gathering finished.");
+        } else {
+            console.log(`ICE gathering finished for ${peerId}.`);
         }
     };
 
     pc.oniceconnectionstatechange = () => {
         if (!pc) return;
-        console.log(`ICE connection state changed to: ${pc.iceConnectionState}`);
-        switch (pc.iceConnectionState) {
+        const currentState = pc.iceConnectionState;
+        console.log(`ICE connection state for ${peerId} changed to: ${currentState}`);
+        state.updateIceConnectionState(peerId, currentState);
+
+        switch (currentState) {
             case 'checking':
-                state.setIsConnecting(true);
-                 // ui.updateContactStatusUI(state.remoteUserId, false); // Keep offline during check?
-                // ui.updateGeneralConnectionUI();
                 break;
-            case 'connected': // Indicates connection is established, but not necessarily verified end-to-end
-                state.setIsConnecting(false);
-                 // Data channel open is the more reliable indicator
-                 // ui.updateContactStatusUI(state.remoteUserId, true);
-                 // ui.updateGeneralConnectionUI();
+            case 'connected':
+                 console.log(`ICE connected for ${peerId}. Waiting for data channel.`);
                 break;
-            case 'completed': // All ICE transports established
-                console.log("ICE connection completed.");
+            case 'completed':
+                console.log(`ICE connection completed for ${peerId}.`);
                 break;
             case 'failed':
-                console.error("ICE connection failed.");
-                 const failedPeer = state.remoteUserId; // Store before reset
-                 ui.addSystemMessage(`与 ${state.contacts[failedPeer]?.name || failedPeer || '远程用户'} 的连接失败。`, true);
-                 resetConnection();
-                 if (failedPeer) {
-                     state.updateContactStatus(failedPeer, false);
-                     ui.updateContactStatusUI(failedPeer, false);
-                 }
+                console.error(`ICE connection failed for ${peerId}.`);
+                ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接失败 (ICE)。`, peerId, true);
+                resetPeerConnection(peerId);
+                 state.updateContactStatus(peerId, false);
+                 ui.updateContactStatusUI(peerId, false);
                 break;
             case 'disconnected':
-                console.warn("ICE connection disconnected. May reconnect...");
-                 const disconnectedPeer = state.remoteUserId; // Store before reset
-                 // Don't immediately reset, give it a chance to reconnect
-                 state.setIsConnected(false);
-                 state.setIsConnecting(false);
-                 if (disconnectedPeer) {
-                     state.updateContactStatus(disconnectedPeer, false); // Show as offline during disconnect
-                     ui.updateContactStatusUI(disconnectedPeer, false);
-                 }
-                 ui.updateChatInputVisibility(); // Replace updateGeneralConnectionUI
-                 // Consider starting a timer to fully reset if it doesn't reconnect
+                console.log(`ICE connection disconnected for ${peerId}. May reconnect...`);
+                ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接中断 (ICE)。可能尝试重连...`, peerId);
+                state.updateContactStatus(peerId, false);
+                ui.updateContactStatusUI(peerId, false);
                 break;
             case 'closed':
-                console.log("ICE connection closed.");
-                 const closedPeer = state.remoteUserId; // Store before reset
-                 // Ensure state is fully reset if closed unexpectedly
-                 if (state.isConnected || state.isConnecting) {
-                     resetConnection();
-                     if (closedPeer) {
-                         state.updateContactStatus(closedPeer, false);
-                         ui.updateContactStatusUI(closedPeer, false);
-                     }
+                console.log(`ICE connection closed for ${peerId}.`);
+                resetPeerConnection(peerId);
+                 state.updateContactStatus(peerId, false);
+                 ui.updateContactStatusUI(peerId, false);
+                break;
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+        if (!pc) return;
+        const overallState = pc.connectionState;
+         console.log(`Overall connection state for ${peerId} changed to: ${overallState}`);
+         state.updateOverallConnectionState(peerId, overallState);
+
+        switch (overallState) {
+            case 'new':
+            case 'connecting':
+                break;
+            case 'connected':
+                 console.log(`Overall connection established for ${peerId}.`);
+                 if (state.getDataChannel(peerId)?.readyState === 'open') {
+                    state.updateContactStatus(peerId, true);
+                    ui.updateContactStatusUI(peerId, true);
+                 } else {
+                    state.updateContactStatus(peerId, 'connecting');
+                    ui.updateContactStatusUI(peerId, 'connecting');
                  }
+
+                break;
+            case 'failed':
+                console.error(`Overall connection failed for ${peerId}.`);
+                 ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接失败。`, peerId, true);
+                resetPeerConnection(peerId);
+                 state.updateContactStatus(peerId, false);
+                 ui.updateContactStatusUI(peerId, false);
+                break;
+            case 'disconnected':
+                 console.log(`Overall connection disconnected for ${peerId}.`);
+                ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接中断。`, peerId);
+                resetPeerConnection(peerId);
+                 state.updateContactStatus(peerId, false);
+                 ui.updateContactStatusUI(peerId, false);
+                break;
+            case 'closed':
+                 console.log(`Overall connection closed for ${peerId}.`);
+                resetPeerConnection(peerId);
+                 state.updateContactStatus(peerId, false);
+                 ui.updateContactStatusUI(peerId, false);
                 break;
         }
     };
 
     pc.ondatachannel = (event) => {
-        console.log("Data channel received");
-        const receiveChannel = event.channel;
-        setupDataChannelEvents(receiveChannel);
-        state.setDataChannel(receiveChannel);
-    };
+        console.log(`Data channel received from ${peerId}: ${event.channel.label}`);
+        const dc = event.channel;
+         state.setDataChannel(peerId, dc);
 
-    pc.onnegotiationneeded = async () => {
-        // This might be triggered if STUN/TURN requires renegotiation, or adding tracks later
-        console.log("Negotiation needed event triggered.");
-         if (state.isConnecting || !state.remoteUserId || !state.peerConnection || state.peerConnection.signalingState !== 'stable') {
-             console.log("Skipping renegotiation due to unstable state.");
-             return;
-         }
-        try {
-             console.log("Attempting renegotiation (creating offer)...");
-             const offer = await pc.createOffer();
-             await pc.setLocalDescription(offer);
-             sendSignalingMessage({ type: 'offer', payload: { targetUserId: state.remoteUserId, sdp: pc.localDescription } });
-             console.log("Sent renegotiation offer.");
-         } catch (error) {
-             console.error("Error during renegotiation:", error);
-             ui.addSystemMessage("连接重新协商失败。", true);
-             resetConnection();
-         }
+        setupDataChannelEvents(peerId, dc);
+
+        if (pc.connectionState === 'connected') {
+             state.updateContactStatus(peerId, true);
+             ui.updateContactStatusUI(peerId, true);
+        }
     };
 
      pc.onsignalingstatechange = () => {
          if (!pc) return;
-         console.log(`Signaling state changed to: ${pc.signalingState}`);
-         // Potential place to handle errors or state transitions
+         console.log(`Signaling state for ${peerId} changed to: ${pc.signalingState}`);
+         state.updateSignalingState(peerId, pc.signalingState);
+         if (pc.signalingState === 'closed') {
+              console.log(`Signaling state closed for ${peerId}. Ensuring cleanup.`);
+              resetPeerConnection(peerId);
+         }
      };
 }
 
-async function setupDataChannelEvents(dc) {
-    dc.onopen = async () => {
-        const connectedPeerId = state.remoteUserId; // Capture the ID at the time of opening
-        if (!connectedPeerId) {
-            console.error("Data channel opened but remoteUserId is null!");
-            resetConnection();
-            return;
-        }
-        console.log(`Data channel opened with ${connectedPeerId}`);
-        state.setIsConnected(true);
-        state.setIsConnecting(false);
+async function setupDataChannelEvents(peerId, dc) {
+    console.log(`Setting up data channel (${dc.label}) events for peer: ${peerId}`);
 
-        // Update state and UI for the connected peer
-        state.updateContactStatus(connectedPeerId, true);
-        ui.updateContactStatusUI(connectedPeerId, true);
+    dc.onopen = () => {
+        console.log(`Data channel opened for peer ${peerId}`);
+        state.updateDataChannelState(peerId, 'open');
 
-        ui.addSystemMessage(`已连接到 ${state.contacts[connectedPeerId]?.name || connectedPeerId}。`);
+        const pc = state.getPeerConnection(peerId);
+        if (pc && (pc.connectionState === 'connected' || pc.connectionState === 'completed')) {
+           state.updateContactStatus(peerId, true);
+           ui.updateContactStatusUI(peerId, true);
+           if (state.isActiveChat(peerId)) {
+                 ui.updateChatInputVisibility();
+           }
+           ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的安全连接已建立。`, peerId);
 
-        if (state.localKeyPair && state.localKeyPair.publicKey) {
-            try {
-                const publicKeyJwk = await crypto.exportPublicKey(state.localKeyPair.publicKey);
-                if (publicKeyJwk) {
-                    const keyMessage = {
-                        type: 'public-key',
-                        payload: publicKeyJwk
-                    };
-                    if (state.dataChannel && state.dataChannel.readyState === 'open') {
-                        state.dataChannel.send(JSON.stringify(keyMessage));
-                        console.log("Sent public key to peer.");
-                    } else {
-                         console.warn("Data channel closed or became invalid before public key could be sent.");
-                         resetConnection();
-                         return;
-                    }
-                } else {
-                    console.error("Failed to export local public key. Cannot perform key exchange.");
-                    ui.addSystemMessage("导出本地公钥失败，无法建立加密连接。", true);
-                    resetConnection();
-                    return;
-                }
-            } catch (error) {
-                console.error("Error during public key export/send:", error);
-                ui.addSystemMessage("发送公钥时出错，无法建立加密连接。", true);
-                resetConnection();
-                return;
-            }
         } else {
-             console.error("Cannot send public key: Local key pair not generated or available.");
-             ui.addSystemMessage("本地密钥对不可用，无法建立加密连接。", true);
-             resetConnection();
-             return;
+             console.warn(`Data channel for ${peerId} opened, but overall connection state is ${pc?.connectionState}. Waiting.`);
+             state.updateContactStatus(peerId, 'connecting');
+             ui.updateContactStatusUI(peerId, 'connecting');
         }
 
-         // Update general UI (e.g., enable chat input)
-         ui.updateChatInputVisibility(); // Replace updateGeneralConnectionUI
     };
 
     dc.onclose = () => {
-        const closedPeerId = state.remoteUserId; // Capture ID before potential reset
-        console.log(`Data channel closed with ${closedPeerId}`);
-         // Only reset if the peer connection isn't already closing/closed
-         // and if we were actually connected to this peer
-         if (state.isConnected && closedPeerId && state.peerConnection && state.peerConnection.connectionState !== 'closed') {
-             resetConnection(); // Reset the state if the channel closes unexpectedly
-             if (closedPeerId) { // Check again after potential reset
-                 ui.addSystemMessage(`与 ${state.contacts[closedPeerId]?.name || closedPeerId} 的连接已断开。`);
-                 // Status is updated within resetConnection now
-             }
-         } else if (state.isConnecting && closedPeerId) {
-             // If it closes while connecting, it's a failure
-             console.log(`Data channel closed while connecting to ${closedPeerId}.`);
-             resetConnection();
-             if (closedPeerId) {
-                 ui.addSystemMessage(`无法连接到 ${state.contacts[closedPeerId]?.name || closedPeerId} (数据通道关闭)。`, true);
-             }
-         }
-
-        ui.updateChatInputVisibility(); // Replace updateGeneralConnectionUI
+        console.log(`Data channel closed for peer ${peerId}`);
+         state.updateDataChannelState(peerId, 'closed');
+         ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的数据通道已关闭。`, peerId);
+        resetPeerConnection(peerId);
+         state.updateContactStatus(peerId, false);
+         ui.updateContactStatusUI(peerId, false);
+          if (state.isActiveChat(peerId)) {
+                 ui.updateChatInputVisibility();
+           }
     };
 
     dc.onerror = (error) => {
-        const errorPeerId = state.remoteUserId; // Capture ID
-        console.error(`Data channel error with peer ${errorPeerId}:`, error);
-
-        // Check if the error is likely due to an intentional close (resetConnection being called elsewhere)
-        // or if the connection state indicates it's already being torn down.
-        const isClosing = !state.peerConnection ||
-                          ['closed', 'failed', 'disconnected'].includes(state.peerConnection.connectionState);
-
-        const isUserAbortError = error.error instanceof DOMException && // Check if error.error exists and is a DOMException
-                               error.error.name === 'OperationError' &&
-                               error.error.message.includes('Close called');
-
-        if (isClosing || isUserAbortError) {
-            console.warn(`Data channel error ignored as connection is already closing/closed or it's a direct consequence of closing the channel.`);
-            // If the connection is already closing or the error is just reporting the close, no need to reset again.
-        } else {
-            // Unexpected data channel error, treat it as a connection failure.
-            ui.addSystemMessage(`与 ${state.contacts[errorPeerId]?.name || errorPeerId || '远程用户'} 的数据通道发生意外错误。`, true);
-            resetConnection();
-            // Status update handled by resetConnection
-        }
+        console.error(`Data channel error for peer ${peerId}:`, error);
+         ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的数据通道发生错误。`, peerId, true);
+        resetPeerConnection(peerId);
+         state.updateContactStatus(peerId, false);
+         ui.updateContactStatusUI(peerId, false);
+          if (state.isActiveChat(peerId)) {
+                 ui.updateChatInputVisibility();
+           }
     };
 
-    dc.onmessage = (event) => {
-        const currentRemoteId = state.remoteUserId; // Ensure message is from current peer
-        if (typeof event.data === 'string') {
-            try {
-                const message = JSON.parse(event.data);
-                if (message.senderId && message.senderId !== currentRemoteId) {
-                     console.warn(`Ignoring message from unexpected sender ${message.senderId}. Expected ${currentRemoteId}.`);
-                     return;
-                }
+    dc.onmessage = async (event) => {
+        console.log(`Raw message received from ${peerId} on channel ${dc.label}`);
+        try {
+            let messageData;
+            let isFileMeta = false;
 
-                switch (message.type) {
-                    case 'chat':
-                        crypto.decryptMessage(message.payload).then(decryptedText => {
-                             const msgData = {
-                                 peerId: currentRemoteId, // Sender is the connected remote peer
-                                 text: decryptedText,
-                                 timestamp: message.timestamp || Date.now(),
-                                 isLocal: false,
-                                 isEncrypted: true
-                             };
-                             ui.addP2PMessageToList(msgData);
-                             storage.addMessage(msgData);
-                        }).catch(err => {
-                             console.error("Decryption failed:", err);
-                             ui.addSystemMessage("收到无法解密的消息。", true);
-                             const msgData = {
-                                 peerId: currentRemoteId,
-                                 text: "[无法解密的消息]",
-                                 timestamp: message.timestamp || Date.now(),
-                                 isLocal: false,
-                                 isEncrypted: false
-                             };
-                             ui.addP2PMessageToList(msgData);
-                             storage.addMessage(msgData);
-                        });
-                        break;
-                    case 'typing':
-                        if (message.payload === 'start') {
-                            ui.showTypingIndicator();
-                        } else if (message.payload === 'stop') {
-                            ui.hideTypingIndicator();
-                        }
-                        break;
-                    case 'public-key':
-                        console.log("Received public key");
-                        crypto.handlePublicKey(message.payload);
-                        break;
-                    case 'file-info':
-                        console.log("Received file-info");
-                         const fileInfoPayload = { ...message.payload, senderId: currentRemoteId };
-                         fileTransfer.handleIncomingFileInfo(fileInfoPayload);
-                        break;
-                     case 'file-end':
-                         console.log("Received file-end");
-                         fileTransfer.handleIncomingFileEnd(message.payload);
-                         break;
-                    default:
-                        console.log("Received unhandled message type:", message.type);
-                }
-            } catch (e) {
-                console.error("Failed to parse incoming string message or handle it:", event.data, e);
-                ui.addSystemMessage("收到无法处理的文本消息。", true);
+            if (typeof event.data === 'string') {
+                 try {
+                     const parsed = JSON.parse(event.data);
+                     if (parsed.type === 'fileMeta') {
+                         messageData = parsed;
+                         isFileMeta = true;
+                         console.log(`Received file metadata from ${peerId}:`, messageData.payload);
+                     } else if (parsed.type === 'text') {
+                         messageData = parsed;
+                         console.log(`Received text message object from ${peerId}:`, messageData);
+                     } else if (parsed.type === 'typing') {
+                          console.log(`Received typing indicator from ${peerId}:`, parsed.payload.isTyping);
+                          ui.showTypingIndicator(peerId, parsed.payload.isTyping);
+                          return;
+                     } else {
+                         messageData = { type: 'text', payload: { text: event.data }, timestamp: Date.now() };
+                         console.log(`Received plain text string from ${peerId}, wrapping:`, messageData.payload.text);
+                     }
+                 } catch(e) {
+                     messageData = { type: 'text', payload: { text: event.data }, timestamp: Date.now() };
+                     console.log(`Received non-JSON string from ${peerId}, wrapping:`, messageData.payload.text);
+                 }
+            } else if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
+                console.log(`Received binary data chunk from ${peerId} (${event.data.byteLength} bytes)`);
+                fileTransfer.handleIncomingDataChunk(peerId, event.data);
+                return;
+            } else {
+                 console.warn(`Received message of unknown type from ${peerId}:`, typeof event.data);
+                 messageData = { type: 'unknown', payload: { data: event.data }, timestamp: Date.now() };
             }
-        } else if (event.data instanceof ArrayBuffer) {
-            // console.log("Received binary message (ArrayBuffer), size:", event.data.byteLength);
-            fileTransfer.handleIncomingFileChunk(event.data);
-        } else {
-            console.warn("Received message of unknown type:", typeof event.data, event.data);
+
+            messageData.senderId = peerId;
+
+             if (isFileMeta) {
+                 const fileInfo = messageData.payload;
+                 const systemMsg = `收到来自 ${state.contacts[peerId]?.name || peerId} 的文件传输请求: ${fileInfo.name} (${fileTransfer.formatBytes(fileInfo.size)})`;
+                 const messageForUi = {
+                     id: messageData.payload.transferId || `file-${Date.now()}`,
+                     senderId: peerId,
+                     type: 'fileMeta',
+                     payload: fileInfo,
+                     timestamp: messageData.timestamp || Date.now()
+                 };
+                 await storage.addMessage(peerId, messageForUi);
+                 ui.displayMessage(peerId, messageForUi);
+                 ui.showUnreadIndicator(peerId, true);
+                 fileTransfer.handleIncomingFileMeta(peerId, messageData.payload);
+             } else if (messageData.type === 'text') {
+                  const messageToStore = {
+                      id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                      senderId: peerId,
+                      type: 'text',
+                      payload: { text: messageData.payload.text },
+                      timestamp: messageData.timestamp || Date.now()
+                  };
+                 await storage.addMessage(peerId, messageToStore);
+                 console.log(`Stored message from ${peerId}:`, messageToStore);
+
+                 if (state.isActiveChat(peerId)) {
+                     ui.displayMessage(peerId, messageToStore);
+                 } else {
+                     ui.showUnreadIndicator(peerId, true);
+                 }
+             } else {
+                 console.log(`Not storing or displaying message of type: ${messageData.type}`);
+             }
+
+        } catch (e) {
+            console.error(`Error processing message from ${peerId}:`, e);
+             ui.addSystemMessage(`处理来自 ${state.contacts[peerId]?.name || peerId} 的消息时出错。`, peerId, true);
         }
     };
 }
 
-async function handleOffer(offerSdp) {
-    if (!state.remoteUserId) {
-        console.error("Cannot handle offer: remoteUserId not set.");
+async function handleOffer(peerId, offerSdp) {
+    console.log(`Handling offer for peer: ${peerId}`);
+    const pc = createPeerConnection(peerId);
+
+    if (!pc) {
+        console.error(`Failed to get/create PeerConnection for ${peerId}`);
         return;
     }
+
+    const perfectNegotiation = false;
+    const makingOffer = state.isMakingOffer(peerId);
+    const ignoreOffer = perfectNegotiation && makingOffer || pc.signalingState !== "stable";
+
+    if (ignoreOffer) {
+        console.log(`Ignoring offer from ${peerId} due to signaling state: ${pc.signalingState} or making offer flag.`);
+        return;
+    }
+
     try {
-        const pc = createPeerConnection(); // Create PC first
-        if (!pc) throw new Error("PeerConnection creation failed in handleOffer");
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: offerSdp }));
+        console.log(`Remote description (offer) set for peer ${peerId}`);
 
-        await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
-        console.log("Remote description (offer) set.");
-
-        console.log("Creating answer...");
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        console.log("Local description (answer) set.");
+        console.log(`Local description (answer) set for peer ${peerId}`);
 
         const answerMsg = {
             type: 'answer',
             payload: {
-                targetUserId: state.remoteUserId,
-                sdp: pc.localDescription
+                targetUserId: peerId,
+                sdp: pc.localDescription.sdp
             }
         };
         sendSignalingMessage(answerMsg);
-        console.log("Sent answer.");
-    } catch (error) {
-        console.error("Error handling offer:", error);
-        const failedPeer = state.remoteUserId; // Store before reset
-        ui.addSystemMessage(`处理来自 ${state.contacts[failedPeer]?.name || failedPeer || '未知用户'} 的连接请求失败。`, true);
-        resetConnection(); // Resets state & UI generally
-        // Explicitly update status for the specific peer after reset
-        if (failedPeer) {
-            state.updateContactStatus(failedPeer, false);
-            ui.updateContactStatusUI(failedPeer, false);
+        console.log(`Sent answer to ${peerId}`);
+        state.updateConnectionState(peerId, 'connecting');
+        ui.updateContactStatusUI(peerId, 'connecting');
+
+    } catch (e) {
+        console.error(`Error handling offer from ${peerId}:`, e);
+        resetPeerConnection(peerId);
+    }
+}
+
+async function handleAnswer(peerId, answerSdp) {
+    console.log(`Handling answer for peer: ${peerId}`);
+    const pc = state.getPeerConnection(peerId);
+
+    if (!pc) {
+        console.error(`No PeerConnection found for peer ${peerId} when handling answer.`);
+        return;
+    }
+
+    if (pc.signalingState !== 'have-local-offer') {
+         console.warn(`Received answer from ${peerId}, but signaling state is ${pc.signalingState}. Ignoring.`);
+         return;
+    }
+
+    try {
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answerSdp }));
+        console.log(`Remote description (answer) set for peer ${peerId}`);
+    } catch (e) {
+        console.error(`Error handling answer from ${peerId}:`, e);
+        resetPeerConnection(peerId);
+    }
+}
+
+async function handleCandidate(peerId, candidate) {
+     console.log(`Handling ICE candidate for peer: ${peerId}`);
+    const pc = state.getPeerConnection(peerId);
+
+    if (!pc) {
+        console.error(`No PeerConnection found for peer ${peerId} when handling candidate.`);
+        return;
+    }
+
+    if (!candidate) {
+        console.log(`Received null candidate for ${peerId}, signaling end-of-candidates.`);
+        return;
+    }
+
+    try {
+        if (!pc.remoteDescription) {
+             console.warn(`PeerConnection for ${peerId} has no remote description yet. Queuing candidate? (Not implemented)`);
+             return;
         }
-    }
-}
-
-async function handleAnswer(answerSdp) {
-    if (!state.peerConnection) {
-        console.error("Cannot handle answer: PeerConnection not initialized.");
-        return;
-    }
-    try {
-        await state.peerConnection.setRemoteDescription(new RTCSessionDescription(answerSdp));
-        console.log("Remote description (answer) set.");
-        // Connection should now establish via ICE state changes and data channel events
-    } catch (error) {
-        console.error("Error handling answer:", error);
-        const targetPeer = state.remoteUserId; // Store before reset
-        ui.addSystemMessage(`处理来自 ${state.contacts[targetPeer]?.name || targetPeer} 的应答失败。`, true);
-        resetConnection();
-         if (targetPeer) {
-             state.updateContactStatus(targetPeer, false);
-             ui.updateContactStatusUI(targetPeer, false);
-         }
-    }
-}
-
-async function handleCandidate(candidate) {
-    if (!state.peerConnection) {
-        console.warn("Cannot handle candidate: PeerConnection not initialized. Buffering might be needed.");
-        // TODO: Implement candidate buffering if needed
-        return;
-    }
-    try {
-        await state.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        // console.log("Added ICE candidate."); // Less verbose
-    } catch (error) {
-        // Ignore benign errors like candidate already added or state preventing it
-         if (error.name !== 'InvalidStateError' && !error.message.includes("applied")) {
-             console.error("Error adding ICE candidate:", error);
-             // Don't reset the whole connection for a single bad candidate usually
-             // ui.addSystemMessage(`处理 ICE candidate 时出错。`, true);
-         }
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+         console.log(`Added ICE candidate for peer ${peerId}`);
+    } catch (e) {
+        if (pc.signalingState !== 'closed') {
+            console.error(`Error adding ICE candidate for ${peerId}:`, e);
+        }
     }
 }
 
 // --- Public Connection Functions ---
 
-/**
- * Initiates a connection to a target peer.
- * @param {string} targetPeerId The ID of the peer to connect to.
- */
 export async function connectToPeer(targetPeerId) {
-    if (!targetPeerId || targetPeerId === state.localUserId) {
-        console.warn("Invalid target peer ID or connecting to self.");
-        ui.addSystemMessage("无效的目标用户 ID。", true);
-        return;
-    }
-    if ((state.isConnected || state.isConnecting) && state.remoteUserId === targetPeerId) {
-        console.log(`Already connected or connecting to ${targetPeerId}. No action needed.`);
+    if (!targetPeerId) {
+        console.error("connectToPeer called without targetPeerId");
         return;
     }
 
-    if ((state.isConnected || state.isConnecting) && state.remoteUserId !== targetPeerId) {
-        console.warn(`Already connected/connecting to ${state.remoteUserId}. Disconnecting first to connect to ${targetPeerId}.`);
-        ui.addSystemMessage(`正在断开与 ${state.contacts[state.remoteUserId]?.name || state.remoteUserId} 的连接...`);
-        disconnectFromPeer();
-        await new Promise(resolve => setTimeout(resolve, 150));
+    if (state.getConnectionState(targetPeerId) === 'connected' || state.getConnectionState(targetPeerId) === 'connecting') {
+         console.log(`Already connected or connecting to ${targetPeerId}. Ignoring connect request.`);
+         return;
     }
 
-    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        console.error("Cannot initiate connection: WebSocket not connected.");
-        ui.addSystemMessage("无法发起连接：未连接到信令服务器。", true);
-        return;
+    console.log(`Attempting to connect to peer: ${targetPeerId}`);
+    ui.addSystemMessage(`正在尝试连接到 ${state.contacts[targetPeerId]?.name || targetPeerId}...`, targetPeerId);
+    state.updateContactStatus(targetPeerId, 'connecting');
+    ui.updateContactStatusUI(targetPeerId, 'connecting');
+    state.setActiveChat(targetPeerId);
+    state.updateConnectionState(targetPeerId, 'connecting');
+    state.setIsMakingOffer(targetPeerId, true);
+
+    resetPeerConnection(targetPeerId);
+
+    const pc = createPeerConnection(targetPeerId);
+    if (!pc) {
+         console.error(`Failed to create PeerConnection for outgoing call to ${targetPeerId}`);
+         state.setIsMakingOffer(targetPeerId, false);
+         return;
     }
-
-    console.log(`Initiating connection to ${targetPeerId}...`);
-    state.setRemoteUserId(targetPeerId);
-    state.setIsConnecting(true);
-    state.setIsConnected(false);
-
-    ui.addSystemMessage(`正在尝试连接 ${state.contacts[targetPeerId]?.name || targetPeerId}...`);
-    ui.updateChatInputVisibility();
 
     try {
-        // Ensure local key pair is ready before proceeding
-        if (!state.localKeyPair) {
-            console.error("Cannot initiate connection: Local key pair not initialized.");
-            ui.addSystemMessage("错误：本地加密密钥未就绪。无法发起连接。", true);
-            // Optionally try to initialize again?
-            // await crypto.initializeCryptography(); // This might be too complex here
-            resetConnection(); // Reset state as we cannot proceed
-            return;
-        }
+        console.log(`Creating data channel for ${targetPeerId}`);
+        const dc = pc.createDataChannel('chat', { negotiated: false });
+        state.setDataChannel(targetPeerId, dc);
+        setupDataChannelEvents(targetPeerId, dc);
 
-        const pc = createPeerConnection();
-        if (!pc) throw new Error("PeerConnection creation failed");
-
-        console.log("Creating data channel...");
-        const dc = pc.createDataChannel("chatChannel");
-        setupDataChannelEvents(dc);
-        state.setDataChannel(dc);
-        console.log("Data channel created.");
-
-        console.log("Creating offer...");
+        console.log(`Creating offer for ${targetPeerId}`);
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        console.log("Local description (offer) set.");
+        console.log(`Local description (offer) set for ${targetPeerId}`);
 
         const offerMsg = {
             type: 'offer',
             payload: {
                 targetUserId: targetPeerId,
-                sdp: pc.localDescription
+                sdp: pc.localDescription.sdp
             }
         };
         sendSignalingMessage(offerMsg);
-        console.log("Sent offer.");
+        console.log(`Sent offer to ${targetPeerId}`);
 
-    } catch (error) {
-        console.error(`Error initiating connection to ${targetPeerId}:`, error);
-        const failedPeer = targetPeerId;
-        // REMOVED: Specific check for key generation failure is less relevant now
-        // if (error.message.includes("Key generation failed")) {
-        //     ui.addSystemMessage(`生成加密密钥失败，无法连接到 ${state.contacts[failedPeer]?.name || failedPeer}。`, true);
-        // } else {
-            ui.addSystemMessage(`发起与 ${state.contacts[failedPeer]?.name || failedPeer} 的连接失败。`, true);
-        // }
-        resetConnection();
+        startConnectionTimeout(targetPeerId);
+
+    } catch (e) {
+        console.error(`Error initiating connection to ${targetPeerId}:`, e);
+         ui.addSystemMessage(`无法发起与 ${state.contacts[targetPeerId]?.name || targetPeerId} 的连接。`, targetPeerId, true);
+        resetPeerConnection(targetPeerId);
+         state.updateContactStatus(targetPeerId, false);
+         ui.updateContactStatusUI(targetPeerId, false);
+         state.setIsMakingOffer(targetPeerId, false);
+    } finally {
     }
 }
 
-/**
- * Disconnects from the currently connected peer.
- */
-export function disconnectFromPeer() {
-    const peerToDisconnect = state.remoteUserId; // Capture the ID before resetting
-    console.log(`Disconnecting from peer: ${peerToDisconnect || 'N/A'}...`);
-
-    resetConnection(); // Resets state variables and closes PC/DC, updates UI
-
-    if (peerToDisconnect) {
-         // Send disconnect message via signaling? Optional.
-         // sendSignalingMessage({ type: 'disconnect', payload: { targetUserId: peerToDisconnect } });
-
-         ui.addSystemMessage(`已断开与 ${state.contacts[peerToDisconnect]?.name || peerToDisconnect} 的连接。`);
-         // Status UI is updated within resetConnection
-    } else if (!state.isConnected && !state.isConnecting) {
-         // If called when not connected/connecting, just log it.
-         console.log("disconnectFromPeer called but not connected/connecting.");
-         // ui.addSystemMessage("当前未连接。", false);
+export function disconnectFromPeer(peerId) {
+    if (!peerId) {
+         console.warn("disconnectFromPeer called without peerId");
+         peerId = state.getActiveChatPeerId();
+         if (!peerId) return;
     }
-    // General UI update is handled by resetConnection
+    console.log(`Disconnecting from peer: ${peerId}`);
+     const pc = state.getPeerConnection(peerId);
+
+    if (pc) {
+        ui.addSystemMessage(`正在断开与 ${state.contacts[peerId]?.name || peerId} 的连接...`, peerId);
+        resetPeerConnection(peerId);
+    } else {
+        console.log(`No active connection found for peer ${peerId} to disconnect.`);
+         state.updateContactStatus(peerId, false);
+         ui.updateContactStatusUI(peerId, false);
+         state.updateConnectionState(peerId, 'disconnected');
+    }
 }
 
-/**
- * Resets the WebRTC connection state and related variables.
- */
-function resetConnection() {
-    console.log("Resetting connection state...");
-    const previousPeer = state.resetConnectionState();
+function resetPeerConnection(peerId) {
+     if (!peerId) {
+         console.warn("resetPeerConnection called without peerId. This might indicate a logic error.");
+         return;
+     }
+    console.log(`Resetting connection state for peer: ${peerId}`);
 
-    ui.hideTypingIndicator();
+    clearConnectionTimeout(peerId);
 
-    if (previousPeer && state.contacts[previousPeer]) {
-        ui.updateContactStatusUI(previousPeer, false);
-        console.log(`[Reset] Ensured UI status for ${previousPeer} is offline.`);
-    } else if (previousPeer) {
-        console.log(`[Reset] Previous peer ${previousPeer} not found in contacts.`);
+    const pc = state.getPeerConnection(peerId);
+    const dc = state.getDataChannel(peerId);
+
+    if (dc) {
+        try {
+            console.log(`Closing data channel for ${peerId}`);
+            dc.close();
+        } catch (e) { console.warn(`Error closing data channel for ${peerId}:`, e); }
+         state.removeDataChannel(peerId);
     }
 
-    ui.updateChatInputVisibility(); // Replace updateGeneralConnectionUI
-    console.log("Connection state reset complete.");
-}
+    if (pc) {
+        try {
+            console.log(`Closing PeerConnection for ${peerId}`);
+            pc.close();
+        } catch (e) { console.warn(`Error closing PeerConnection for ${peerId}:`, e); }
+         state.removePeerConnection(peerId);
+    }
 
-// --- Message Sending ---
+    state.resetPeerState(peerId);
+
+    if (state.isActiveChat(peerId)) {
+        ui.updateChatInputVisibility();
+    }
+     state.updateContactStatus(peerId, false);
+     ui.updateContactStatusUI(peerId, false);
+
+     console.log(`Finished resetting connection for ${peerId}`);
+}
 
 export function sendChatMessage(text) {
-    if (!state.isConnected || !state.dataChannel || state.dataChannel.readyState !== 'open') {
-        ui.addSystemMessage("无法发送消息：未连接或数据通道未就绪。", true);
+    const activePeerId = state.getActiveChatPeerId();
+
+    if (!activePeerId) {
+        console.warn("sendChatMessage: No active chat selected.");
+        ui.addSystemMessage("请先选择一个聊天对象。", null, true);
         return;
     }
-    if (!state.sharedKey) {
-         ui.addSystemMessage("无法发送消息：端到端加密密钥交换未完成。", true);
-         return;
+
+    const dc = state.getDataChannel(activePeerId);
+
+    if (dc && dc.readyState === 'open') {
+        try {
+            const message = {
+                 id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                 type: 'text',
+                 senderId: state.localUserId,
+                 payload: { text: text },
+                 timestamp: Date.now()
+            };
+            const messageString = JSON.stringify(message);
+            dc.send(messageString);
+            console.log(`Sent message to ${activePeerId}:`, text);
+
+            storage.addMessage(activePeerId, message);
+
+            ui.displayMessage(activePeerId, message);
+            ui.clearChatInput();
+
+        } catch (e) {
+            console.error(`Error sending message to ${activePeerId}:`, e);
+            ui.addSystemMessage(`发送消息到 ${state.contacts[activePeerId]?.name || activePeerId} 失败。`, activePeerId, true);
+        }
+    } else {
+        console.warn(`Cannot send message: Data channel for ${activePeerId} not open. State: ${dc?.readyState}`);
+         ui.addSystemMessage(`无法发送消息：与 ${state.contacts[activePeerId]?.name || activePeerId} 的连接未建立或已断开。`, activePeerId, true);
     }
-
-    crypto.encryptMessage(text).then(encryptedPayload => {
-        const message = {
-            type: 'chat',
-            payload: encryptedPayload,
-            timestamp: Date.now()
-        };
-         try {
-            state.dataChannel.send(JSON.stringify(message));
-             const msgData = {
-                 peerId: state.remoteUserId,
-                 text: text,
-                 timestamp: message.timestamp,
-                 isLocal: true,
-                 isEncrypted: true
-             };
-             ui.addP2PMessageToList(msgData);
-             storage.addMessage(msgData);
-
-         } catch (e) {
-             console.error("Error sending chat message:", e);
-             ui.addSystemMessage("发送消息失败。", true);
-         }
-    }).catch(err => {
-         console.error("Encryption failed:", err);
-         ui.addSystemMessage("加密消息失败，无法发送。", true);
-    });
 }
 
-let typingTimer = null;
 export function sendTypingIndicator(isTyping) {
-    if (!state.isConnected || !state.dataChannel || state.dataChannel.readyState !== 'open') {
+     const activePeerId = state.getActiveChatPeerId();
+
+    if (!activePeerId) {
         return;
     }
 
-    if (typingTimer) {
-        clearTimeout(typingTimer);
-        typingTimer = null;
-    }
+    const dc = state.getDataChannel(activePeerId);
 
-    const payload = isTyping ? 'start' : 'stop';
-    const message = { type: 'typing', payload: payload };
+    if (dc && dc.readyState === 'open') {
+        try {
+            const indicatorMsg = {
+                type: 'typing',
+                payload: { isTyping: isTyping }
+            };
+            dc.send(JSON.stringify(indicatorMsg));
+        } catch (e) {
+            console.error(`Error sending typing indicator to ${activePeerId}:`, e);
+        }
+    }
+}
+
+export async function loadAndDisplayHistory(peerId) {
+    if (!peerId) {
+        console.warn("loadAndDisplayHistory called without peerId");
+        return;
+    }
+    console.log(`Loading history for peer: ${peerId}`);
+    ui.clearChatMessages();
 
     try {
-        if (isTyping) {
-            state.dataChannel.send(JSON.stringify(message));
-            typingTimer = setTimeout(() => {
-                 const stopMessage = { type: 'typing', payload: 'stop' };
-                 try {
-                    if (state.dataChannel && state.dataChannel.readyState === 'open') {
-                         state.dataChannel.send(JSON.stringify(stopMessage));
-                         state.setIsTyping(false);
-                    }
-                 } catch (e) { console.warn("Error sending stop typing indicator:", e); }
-                 typingTimer = null;
-            }, 3000);
-        } else {
-            state.dataChannel.send(JSON.stringify(message));
-             state.setIsTyping(false);
-        }
+        const history = await storage.getMessages(peerId);
+        console.log(`Loaded ${history.length} messages for ${peerId}`);
+        history.forEach(msg => {
+             ui.displayMessage(peerId, msg);
+        });
+        ui.scrollToBottom();
     } catch (e) {
-        console.warn("Error sending typing indicator:", e);
+        console.error(`Error loading history for ${peerId}:`, e);
+        ui.addSystemMessage(`加载 ${state.contacts[peerId]?.name || peerId} 的聊天记录失败。`, peerId, true);
     }
 }
 
-// --- History Loading --- (Moved from ui.js)
+function startConnectionTimeout(peerId) {
+    console.log(`Starting connection timeout for ${peerId}`);
+    state.setConnectionTimeout(peerId, setTimeout(() => {
+        console.log(`Connection timeout for ${peerId}`);
+         ui.addSystemMessage(`连接 ${state.contacts[peerId]?.name || peerId} 超时。`, peerId, true);
+        resetPeerConnection(peerId);
+        state.updateContactStatus(peerId, false);
+        ui.updateContactStatusUI(peerId, false);
+        state.setIsMakingOffer(peerId, false);
+    }, 30000));
+}
 
-/**
- * Loads and displays message history for a given peer.
- * @param {string} peerId The ID of the peer whose history to load.
- */
-export async function loadAndDisplayHistory(peerId) {
-     if (!peerId) return;
-     console.log(`Loading history for ${peerId}...`);
+function clearConnectionTimeout(peerId) {
+     console.log(`Clearing connection timeout for ${peerId}`);
+    state.clearConnectionTimeout(peerId);
+}
 
-     try {
-         const history = await storage.getMessages(peerId);
-         if (history && history.length > 0) {
-             console.log(`Displaying ${history.length} messages from history for ${peerId}`);
-             history.forEach(msgData => {
-                 if (msgData.type === 'chat') {
-                    ui.addP2PMessageToList(msgData);
-                 } else if (msgData.type === 'file') {
-                     let progress = msgData.progress === undefined ? (msgData.status === 'complete' ? 1 : (msgData.status === 'failed' ? -1 : 0)) : msgData.progress;
-                     let downloadUrl = msgData.downloadUrl || null;
-                     ui.addFileMessageToList(msgData.fileInfo, msgData.isLocal, downloadUrl, progress);
-                 } else if (msgData.type === 'system') {
-                     ui.addSystemMessage(msgData.text, msgData.isError);
-                 }
-             });
-         } else {
-             console.log(`No history found for ${peerId}`);
-         }
-     } catch (error) {
-         console.error(`Error loading or displaying history for ${peerId}:`, error);
-         ui.addSystemMessage(`加载 ${peerId} 的历史记录时出错。`, true);
-     }
-     ui.scrollToBottom();
-     ui.updateEmptyState();
- }
-
-// Function to handle application losing focus (visibility change)
 function handleVisibilityChange() {
     if (document.hidden) {
         if (state.isTyping && typingTimer) {
