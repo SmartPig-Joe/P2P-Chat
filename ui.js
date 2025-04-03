@@ -1117,12 +1117,32 @@ export async function handleContactClick(event) {
     const clickedPeerId = targetElement.dataset.peerId;
     const currentActivePeerId = state.getActiveChatPeerId();
 
-    if (!clickedPeerId || clickedPeerId === currentActivePeerId) {
+    if (!clickedPeerId) {
+        console.warn("Clicked invalid target element with no peerId.");
+        return;
+    }
+
+    // If clicking the already active peer, do nothing.
+    if (clickedPeerId === currentActivePeerId) {
          console.log(`Clicked same peer (${clickedPeerId}) or invalid target.`);
-        return; // Clicked already active peer or invalid item
+        return;
     }
 
     console.log(`Contact clicked: ${clickedPeerId}`);
+
+    // --- MODIFICATION START: Check connection and signaling state BEFORE changing active chat ---
+    const connectionStatus = state.getConnectionState(clickedPeerId);
+    const needsConnectionAttempt = (connectionStatus !== 'connected' && connectionStatus !== 'connecting');
+
+    if (needsConnectionAttempt && !state.isSignalingConnected()) {
+        // If we need to connect but signaling is down, warn and exit without changing active chat
+        console.warn(`Cannot switch to ${clickedPeerId} and connect: Signaling server disconnected.`);
+        addSystemMessage(`暂时无法连接到 ${state.contacts[clickedPeerId]?.name || clickedPeerId}：信令服务器未连接。`, null, true); // Global message might be better here
+        return;
+    }
+    // --- MODIFICATION END ---
+
+    // --- Proceed with switching the chat UI ---
 
     // 1. Update State
     state.setActiveChat(clickedPeerId);
@@ -1162,19 +1182,19 @@ export async function handleContactClick(event) {
     // 9. Focus input field? (Optional)
     // if (dom.chatInput) dom.chatInput.focus();
 
-     // 10. Check connection status and initiate connection if offline/disconnected
-     const connectionStatus = state.getConnectionState(clickedPeerId);
-     if (connectionStatus !== 'connected' && connectionStatus !== 'connecting') {
-         console.log(`Contact ${clickedPeerId} is ${connectionStatus}. Attempting to connect...`);
+    // 10. Initiate connection if needed (we already checked signaling state earlier)
+    if (needsConnectionAttempt) {
+         console.log(`Contact ${clickedPeerId} is ${connectionStatus}. Attempting to connect (signaling check passed earlier)...`);
          try {
+             // connectToPeer returns a Promise, but we don't need to await it here
+             // as the connection process runs in the background.
              connection.connectToPeer(clickedPeerId);
-         } catch (e) {
+         } catch (e) { // Note: connectToPeer itself doesn't throw sync errors typically, promise handles errors
               console.error(`Failed to initiate connection via click to ${clickedPeerId}:`, e);
               addSystemMessage(`无法发起与 ${state.contacts[clickedPeerId]?.name || clickedPeerId} 的连接。`, clickedPeerId, true);
          }
-     } else {
-          console.log(`Contact ${clickedPeerId} is already ${connectionStatus}. No new connection initiated.`);
      }
+     // No 'else' needed here, if connection wasn't needed or already connected, we just proceed with UI updates.
 }
 
 // Updates the header of the chat area

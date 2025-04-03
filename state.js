@@ -576,4 +576,9 @@ export function resetConnectionState() {
 
     return previousRemoteUserId; // No longer needed
 }
-*/ 
+*/
+
+// NEW: Check WebSocket connection status
+export function isSignalingConnected() {
+    return ws && ws.readyState === WebSocket.OPEN;
+} 

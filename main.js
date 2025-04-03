@@ -112,6 +112,11 @@ function stopLocalTypingIndicator() {
 
 // --- MODIFIED: Handle Friend Request Logic ---
 async function handleAddContact() {
+    if (!state.isSignalingConnected()) {
+        ui.addSystemMessage("无法添加联系人：未连接到信令服务器。", null, true);
+        return;
+    }
+
     if (!dom.addContactInput) {
         console.warn('[Debug] handleAddContact returning early: addContactInput not found.');
         return;
