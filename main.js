@@ -136,10 +136,13 @@ async function handleAddContact() {
     }
 
     // 2. Check if already sent a request
+    console.log(`[Debug] Checking hasPendingOutgoingRequest for ${peerIdToAdd}. Current set:`, new Set(state.pendingOutgoingRequests)); // Log current state
     if (state.hasPendingOutgoingRequest(peerIdToAdd)) {
+        console.log(`[Debug] Found existing outgoing request for ${peerIdToAdd}. Returning.`); // Log result
         ui.addSystemMessage(`您已向 ${peerIdToAdd} 发送过好友请求，请等待对方确认。`, null);
         return;
     }
+    console.log(`[Debug] No existing outgoing request found for ${peerIdToAdd}. Proceeding.`); // Log result
 
     // 3. Check if there is an incoming request from this user
     if (state.hasPendingIncomingRequest(peerIdToAdd)) {

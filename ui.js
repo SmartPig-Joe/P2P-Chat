@@ -683,6 +683,7 @@ export function updateFileMessageStatusToReceived(peerId, transferId) {
 
 // Re-renders the entire contact list based on state.contacts and pending requests
 export function renderContactList() {
+    console.log(`[Debug] renderContactList called. Current pendingOutgoingRequests:`, new Set(state.pendingOutgoingRequests)); // Log state at render time
     if (!dom.contactsListContainer) return;
 
     dom.contactsListContainer.innerHTML = ''; // Clear existing list
@@ -890,11 +891,16 @@ async function handleAcceptRequest(peerId) {
     if (!request) return;
 
     // 1. Send accept message via P2P
-    const sent = connection.sendFriendAccept(peerId);
+    const sent = await connection.sendFriendAccept(peerId); // Ensure await here if sendFriendAccept becomes truly async
     if (!sent) {
         addSystemMessage(`向 ${request.name || peerId} 发送接受消息失败。`, null, true);
         return; // Don't proceed if sending failed
     }
+
+    // --- NEW: Explicitly reset connection state before adding contact ---
+    console.log(`[Friend Request] Resetting connection state for ${peerId} after sending accept.`);
+    connection.resetPeerConnection(peerId, "Friend Request Accepted");
+    // --- END NEW ---
 
     // 2. Add contact locally
     const addedOrUpdated = state.addContact(peerId, request.name);
@@ -908,9 +914,9 @@ async function handleAcceptRequest(peerId) {
     if (requestElement) {
         requestElement.remove();
         console.log(`Removed incoming request UI for ${peerId}`);
+        updateRequestSectionHeaders(); // <-- Add this call
     } else {
          console.warn(`Could not find incoming request UI element for ${peerId} to remove.`);
-         // Fallback to re-render if element removal fails?
          renderContactList(); // Re-render as fallback
     }
 
@@ -922,19 +928,19 @@ async function handleAcceptRequest(peerId) {
         }
     } else {
          console.warn(`state.addContact returned false for ${peerId}, UI might be inconsistent.`);
-         // Optionally re-render list as a safety measure if state update failed
          renderContactList();
     }
 
-    // No longer calling renderContactList() as the primary update mechanism here.
     addSystemMessage(`您已接受 ${request.name || peerId} 的好友请求。`, null);
 
-    // 5. Optional: Initiate connection if not already connected, or switch to chat
+    // --- REMOVE/COMMENT OUT: Optional connection initiation block ---
+    // The connection should now be reliably initiated by handleContactClick
+    /*
     if (state.getConnectionState(peerId) !== 'connected') {
         connection.connectToPeer(peerId);
     }
-    // Consider automatically switching to the new contact's chat?
-    // handleContactClick simulation might be complex, maybe just connect.
+    */
+    // --- END REMOVAL ---
 }
 
 async function handleDeclineRequest(peerId) {
@@ -957,6 +963,7 @@ async function handleDeclineRequest(peerId) {
     if (requestElement) {
         requestElement.remove();
         console.log(`Removed incoming request UI for ${peerId}`);
+        updateRequestSectionHeaders(); // <-- Add this call
     } else {
         console.warn(`Could not find incoming request UI element for ${peerId} to remove.`);
         // Fallback to re-render if element removal fails?
@@ -982,6 +989,7 @@ export function removeIncomingRequestUI(peerId) {
     if (requestElement) {
         requestElement.remove();
         console.log(`[UI Update] Removed incoming request UI for ${peerId}`);
+        updateRequestSectionHeaders(); // <-- Add this call
     } else {
         console.warn(`[UI Update] Could not find incoming request UI element for ${peerId} to remove.`);
         // Optionally re-render the list as a fallback if granular removal fails
@@ -1024,6 +1032,7 @@ async function handleCancelRequest(peerId) {
     if (requestElement) {
         requestElement.remove();
         console.log(`Removed outgoing request UI for ${peerId}`);
+        updateRequestSectionHeaders(); // <-- Add this call
     } else {
         console.warn(`Could not find outgoing request UI element for ${peerId} to remove.`);
         // Fallback to re-render if element removal fails?
@@ -1606,3 +1615,59 @@ export function initializeUI() {
 
 // Call initialization function once DOM is ready (usually done in main.js)
 // initializeUI(); 
+
+// --- NEW: Update Request Section Headers ---
+/**
+ * Updates the text content of the request section headers (H3 tags)
+ * based on the current counts in the state. Removes sections if count is zero.
+ * Also checks if the entire list becomes empty and shows a placeholder.
+ */
+function updateRequestSectionHeaders() {
+    if (!dom.contactsListContainer) return;
+
+    let listHasContent = false; // Flag to check if any section remains
+
+    // Incoming Requests Section
+    const incomingSection = dom.contactsListContainer.querySelector('#pending-incoming-requests');
+    if (incomingSection) {
+        const incomingCount = state.pendingIncomingRequests.size;
+        if (incomingCount > 0) {
+            const header = incomingSection.querySelector('h3');
+            if (header) {
+                header.textContent = `待处理的请求 - ${incomingCount}`;
+            }
+            listHasContent = true;
+        } else {
+            // If count is 0, remove the entire section
+            incomingSection.remove();
+        }
+    }
+
+    // Outgoing Requests Section
+    const outgoingSection = dom.contactsListContainer.querySelector('#pending-outgoing-requests');
+    if (outgoingSection) {
+        const outgoingCount = state.pendingOutgoingRequests.size;
+        if (outgoingCount > 0) {
+            const header = outgoingSection.querySelector('h3');
+            if (header) {
+                header.textContent = `已发送的请求 - ${outgoingCount}`;
+            }
+            listHasContent = true;
+        } else {
+            // If count is 0, remove the entire section
+            outgoingSection.remove();
+        }
+    }
+
+    // Check if confirmed contacts section still exists
+    if (dom.contactsListContainer.querySelector('#confirmed-contacts')) {
+        listHasContent = true;
+    }
+
+    // If the list is now totally empty, show the placeholder message
+    // Avoid adding duplicate empty messages
+    if (!listHasContent && !dom.contactsListContainer.querySelector('p.text-discord-text-muted')) {
+         dom.contactsListContainer.innerHTML = '<p class="text-discord-text-muted text-sm px-3 py-2">还没有联系人或请求。</p>';
+    }
+}
+// --- END NEW ---

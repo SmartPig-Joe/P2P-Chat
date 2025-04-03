@@ -965,7 +965,7 @@ export function disconnectFromPeer(peerId) {
     }
 }
 
-function resetPeerConnection(peerId, reason = "Unknown") {
+export function resetPeerConnection(peerId, reason = "Unknown") {
      if (!peerId) {
          console.warn("resetPeerConnection called without peerId. This might indicate a logic error.");
          return;

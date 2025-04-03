@@ -426,10 +426,10 @@ export function removeContact(peerId) {
 // --- Reset Functions ---
 
 // Reset state for a *specific* peer
-// --- MODIFIED: Also clear pending requests related to this peer ---
+// --- MODIFIED: Only clear connection-related state, not keys or requests ---
 export function resetPeerState(peerId) {
     if (!peerId) return;
-    console.log(`[RESET] Resetting all state for peer: ${peerId}`); // Added tag
+    console.log(`[RESET] Resetting connection state for peer: ${peerId}`); // Keep log
 
     // Get PC and DC before removing from maps
     const pc = getPeerConnection(peerId);
@@ -443,45 +443,85 @@ export function resetPeerState(peerId) {
         try { pc.close(); } catch (e) { console.warn(`Error closing PeerConnection for ${peerId}:`, e); }
     }
 
-    // Clear state maps
+    // Clear connection-specific state maps
     removePeerConnection(peerId);
     removeDataChannel(peerId);
     connectionStates.delete(peerId);
-    removePeerKeys(peerId);
+    // removePeerKeys(peerId); // DO NOT REMOVE KEYS on simple connection reset
     removePeerTypingStatus(peerId);
     removeMakingOfferFlag(peerId);
-    clearConnectionTimeout(peerId); // Ensure timeout is cleared
+    clearConnectionTimeout(peerId); // Ensure connection attempt timeout is cleared
 
-    // --- NEW: Clear pending requests related to this peer ---
-    removePendingOutgoingRequest(peerId);
-    removePendingIncomingRequest(peerId);
-    // --- END NEW ---
+    // --- DO NOT Clear pending requests related to this peer on simple reset ---
+    // removePendingOutgoingRequest(peerId);
+    // removePendingIncomingRequest(peerId);
+    // --- END MODIFICATION ---
 
-    // Update contact status to offline
-    updateContactStatus(peerId, false);
+    // Update contact status to offline (or connecting if a new attempt starts immediately)
+    // Let the calling function (like connectToPeer) handle setting the 'connecting' status if needed.
+    // Setting to false here might cause a brief flicker. Let's just reset the *connection* state maps.
+    // The UI update should reflect the connectionState.
+    // updateContactStatus(peerId, false); // Maybe remove this direct call, rely on connectionState updates
 
-    // If this was the active chat, clear it
-    if (isActiveChat(peerId)) {
-        setActiveChat(null);
-    }
+    // If this was the active chat, DO NOT clear it just because connection resets
+    // if (isActiveChat(peerId)) {
+    //     setActiveChat(null);
+    // }
 
-     console.log(`Finished resetting state for ${peerId}`);
+     console.log(`Finished resetting connection-specific state for ${peerId}`); // Adjusted log message
 }
 
 // Reset state for *all* peers (e.g., on WebSocket disconnect)
+// --- NOTE: This function *should* still clear everything, including keys and requests ---
 export function resetAllConnections() {
      console.log("Resetting all peer connections and states.");
      const peerIds = Array.from(peerConnections.keys()); // Get all peers we had connections for
      peerIds.forEach(peerId => {
-         resetPeerState(peerId);
+         // Call the original logic implicitly here, or redefine a full reset
+         // For safety, let's explicitly clear everything this function intended to clear
+
+         // Get PC and DC before removing from maps
+         const pc = getPeerConnection(peerId);
+         const dc = getDataChannel(peerId);
+
+         // Close connections
+         if (dc) {
+             try { dc.close(); } catch (e) { console.warn(`Error closing data channel for ${peerId} during full reset:`, e); }
+         }
+         if (pc) {
+             try { pc.close(); } catch (e) { console.warn(`Error closing PeerConnection for ${peerId} during full reset:`, e); }
+         }
+
+         // Clear ALL state maps for this peer
+         removePeerConnection(peerId);
+         removeDataChannel(peerId);
+         connectionStates.delete(peerId);
+         removePeerKeys(peerId); // Clear keys on full reset
+         removePeerTypingStatus(peerId);
+         removeMakingOfferFlag(peerId);
+         clearConnectionTimeout(peerId);
+         removePendingOutgoingRequest(peerId); // Clear outgoing requests on full reset
+         removePendingIncomingRequest(peerId); // Clear incoming requests on full reset
+
+         // Update contact status to offline
+         updateContactStatus(peerId, false);
+
+         // If this was the active chat, clear it
+         if (isActiveChat(peerId)) {
+             setActiveChat(null);
+         }
+
      });
      // Also clear any other potentially relevant global state if needed
      setIncomingFiles({}); // Clear file transfer state
-     // --- NEW: Clear all pending requests on full reset ---
-     pendingOutgoingRequests.clear();
-     pendingIncomingRequests.clear();
-     savePendingRequests(); // Persist the cleared state
-     // --- END NEW ---
+     // --- Clearing pending requests is now handled inside the loop ---
+     // pendingOutgoingRequests.clear(); // Redundant
+     // pendingIncomingRequests.clear(); // Redundant
+     // savePendingRequests(); // Persist the cleared state - Maybe save after loop?
+
+     // Persist cleared pending requests after the loop
+     savePendingRequests();
+
      console.log("Finished resetting all connections.");
 }
 
