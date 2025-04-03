@@ -134,11 +134,13 @@ async function handleAddContact() {
         return;
     }
 
-    // 1. Check if already a contact
+    // 1. Check if already a contact - COMMENTED OUT
+    /*
     if (state.contacts[peerIdToAdd]) {
         ui.addSystemMessage(`用户 ${state.contacts[peerIdToAdd].name || peerIdToAdd} 已经是您的联系人。`, null);
         return;
     }
+    */
 
     // 2. Check if already sent a request
     console.log(`[Debug] Checking hasPendingOutgoingRequest for ${peerIdToAdd}. Current set:`, new Set(state.pendingOutgoingRequests)); // Log current state

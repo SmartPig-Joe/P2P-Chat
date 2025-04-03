@@ -114,6 +114,14 @@ export function addSystemMessage(text, peerId = null, isError = false) {
      }
 }
 
+// --- NEW: Show error when message sent to someone who removed you ---
+export function showNotFriendError(peerId) {
+    const contactName = state.contacts[peerId]?.name || peerId; // Get sender's name (who sent the error)
+    const errorMessage = `您的消息未能发送，因为 ${escapeHTML(contactName)} 已将您从好友列表移除。`;
+    addSystemMessage(errorMessage, peerId, true); // Show error in the specific chat window
+}
+// --- END NEW ---
+
 // --- Chat Messages ---
 function renderMessageContent(text) {
     const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#/%?=~_|!:,.;]*[-A-Z0-9+&@#/%=~_|])/ig;
@@ -917,19 +925,42 @@ async function handleAcceptRequest(peerId) {
         updateRequestSectionHeaders(); // <-- Add this call
     } else {
          console.warn(`Could not find incoming request UI element for ${peerId} to remove.`);
-         renderContactList(); // Re-render as fallback
+         renderContactList(); // Re-render as fallback (Consider removing if update logic below is robust)
+         return; // Exit early if the request element wasn't found, preventing potential issues below
     }
 
-    // Add the new contact element to the list if it was successfully added/updated in state
+    // --- MODIFICATION START ---
+    // Instead of adding, find the *existing* confirmed contact element and update it.
     if (addedOrUpdated) {
         const contactData = state.contacts[peerId]; // Get the final contact data
         if (contactData) {
-            addContactToList(contactData); // Add the confirmed contact to the UI list
+            const existingContactElement = dom.contactsListContainer?.querySelector(`.contact-item.confirmed-contact[data-peer-id="${peerId}"]`);
+
+            if (existingContactElement) {
+                // Update existing element (e.g., name, ensure no pending styles)
+                const nameElement = existingContactElement.querySelector('.flex-grow span'); // Adjust selector if needed
+                if (nameElement) {
+                    nameElement.textContent = contactData.name || contactData.id;
+                }
+                // Optionally update avatar/status if needed, though status should update separately
+                console.log(`Updated existing contact element UI for ${peerId}`);
+            } else {
+                 // Fallback: If somehow the existing element wasn't found, add it (shouldn't normally happen)
+                 console.warn(`Could not find existing confirmed contact element for ${peerId}. Adding new one.`);
+                 addContactToList(contactData);
+            }
+        } else {
+             // Handle case where contactData is unexpectedly missing after addContact succeeded
+             console.error(`Contact data for ${peerId} is missing after state.addContact call.`);
+             renderContactList(); // Re-render as a safety measure
         }
     } else {
+         // This case means state.addContact itself failed, log it.
          console.warn(`state.addContact returned false for ${peerId}, UI might be inconsistent.`);
+         // Maybe renderContactList() here too? Or log the inconsistency.
          renderContactList();
     }
+    // --- MODIFICATION END ---
 
     addSystemMessage(`您已接受 ${request.name || peerId} 的好友请求。`, null);
 

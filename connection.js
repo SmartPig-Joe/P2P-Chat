@@ -498,6 +498,14 @@ async function setupDataChannelEvents(peerId, dc) {
             // --- Process based on messageType --- //
             switch (messageType) {
                 case 'text':
+                     // --- NEW: Check if sender is a contact --- 
+                     if (!state.contacts[originalSenderId]) {
+                         console.warn(`Received text message from non-contact ${originalSenderId}. Ignoring and sending error.`);
+                         sendNotFriendError(originalSenderId); // Send feedback
+                         return; // Stop processing
+                     }
+                     // --- END NEW ---
+
                      // Decryption already happened if it was encrypted
                     const messageToStore = {
                         id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -523,6 +531,14 @@ async function setupDataChannelEvents(peerId, dc) {
                 // For now, assume others are plaintext.
 
                 case 'fileMeta':
+                     // --- NEW: Check if sender is a contact --- 
+                     if (!state.contacts[originalSenderId]) {
+                         console.warn(`Received fileMeta from non-contact ${originalSenderId}. Ignoring and sending error.`);
+                         sendNotFriendError(originalSenderId); // Send feedback
+                         return; // Stop processing
+                     }
+                     // --- END NEW ---
+
                     // Should fileMeta be encrypted? For now, assuming no.
                     const fileInfo = payload;
                     const messageForUi = {
@@ -561,11 +577,6 @@ async function setupDataChannelEvents(peerId, dc) {
                     // Validate payload basics
                     if (!payload.senderId || payload.senderId !== originalSenderId) {
                         console.warn(`[Friend Request] Invalid senderId in request from ${originalSenderId}. Ignoring.`);
-                        return;
-                    }
-                    // Check if already a contact
-                    if (state.contacts[originalSenderId]) {
-                        console.warn(`[Friend Request] Received request from already added contact ${originalSenderId}. Ignoring.`);
                         return;
                     }
                     // Check if we already sent a request to them
@@ -674,6 +685,14 @@ async function setupDataChannelEvents(peerId, dc) {
                     } else {
                         console.warn(`Received invalid file_ack from ${originalSenderId}: Missing transferId.`);
                     }
+                    break;
+                // --- END NEW ---
+
+                // --- NEW: Handle Not Friend Error --- 
+                case 'not_friend_error':
+                    console.log(`Received 'not_friend_error' from ${originalSenderId}`);
+                    // Extract receiverId if needed, or just use originalSenderId
+                    ui.showNotFriendError(originalSenderId); // Notify UI
                     break;
                 // --- END NEW ---
 
@@ -1003,17 +1022,17 @@ export function resetPeerConnection(peerId, reason = "Unknown") {
 }
 
 // --- MODIFIED: Send P2P message helper (Added Encryption) ---
-async function sendP2PMessage(peerId, messageObject) { // Made async
+async function sendP2PMessage(peerId, messageObject, forcePlaintext = false) { // Made async, added forcePlaintext flag
     const dc = state.getDataChannel(peerId);
     if (dc && dc.readyState === 'open') {
         try {
             // --- ENCRYPTION --- 
             let dataToSend;
             const keys = state.getPeerKeys(peerId);
-            // --- MODIFICATION: Define message types NOT to encrypt ---
-            const plaintextMessageTypes = ['publicKey', 'friend_request', 'friend_accept', 'friend_decline', 'friend_cancel']; // Add friend_cancel
+            // --- MODIFICATION: Define message types NOT to encrypt --- 
+            const plaintextMessageTypes = ['publicKey', 'friend_request', 'friend_accept', 'friend_decline', 'friend_cancel', 'not_friend_error']; // Added not_friend_error
 
-            if (keys && keys.sharedKey && !plaintextMessageTypes.includes(messageObject.type)) { // Check if shared key exists AND type should be encrypted
+            if (!forcePlaintext && keys && keys.sharedKey && !plaintextMessageTypes.includes(messageObject.type)) { // Check flag AND shared key AND type
                 console.log(`Encrypting message of type ${messageObject.type} for ${peerId}`);
                 const encryptedPayload = await crypto.encryptMessage(peerId, JSON.stringify(messageObject));
                 // Wrap encrypted data with a specific type
@@ -1179,3 +1198,17 @@ function handleVisibilityChange() {
 }
 
 document.addEventListener("visibilitychange", handleVisibilityChange, false);
+
+// --- NEW: Function to send feedback when receiving message from non-friend ---
+async function sendNotFriendError(peerId) {
+    const errorMessage = {
+        type: 'not_friend_error',
+        payload: {
+            senderId: state.localUserId // Indicate who is sending the error
+        }
+    };
+    console.log(`Sending not_friend_error feedback to ${peerId}`);
+    // This error message should probably be sent plaintext
+    await sendP2PMessage(peerId, errorMessage, true); // Assuming sendP2PMessage can take a flag to force plaintext
+}
+// --- END NEW ---
