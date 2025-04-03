@@ -4,6 +4,7 @@ import * as state from './state.js';
 import { FILE_CHUNK_SIZE } from './constants.js';
 import * as ui from './ui.js';
 import { escapeHTML, formatBytes } from './utils.js';
+import * as connection from './connection.js';
 
 // --- Sending Files ---
 
@@ -338,6 +339,11 @@ function assembleFile(transferId, fileData) {
         // Update the UI to show completion and download link
         ui.updateFileMessageProgress(peerId, transferId, 1, downloadUrl);
 
+        // --- NEW: Send acknowledgement back to the sender ---
+        console.log(`[${transferId}] Sending file acknowledgement back to sender ${peerId}.`);
+        connection.sendFileAck(peerId, transferId);
+        // --- END NEW ---
+
         // Show system message only if the sender is the active chat
         if (peerId === state.getActiveChatPeerId()) {
             ui.addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 接收完成。`, peerId);
@@ -354,14 +360,16 @@ function assembleFile(transferId, fileData) {
 // --- Utility / Cleanup ---
 
 // Cleanup function - Needs refinement. Should be called when closing tabs/connections.
-export function cleanupFileBlobs() {
-    console.warn("cleanupFileBlobs() needs to iterate activeObjectURLs from ui.js and revoke them.");
-    // Example structure (would need access to ui.activeObjectURLs):
-    /*
-    ui.activeObjectURLs.forEach(url => {
-        console.log(`Revoking ObjectURL: ${url}`);
-        URL.revokeObjectURL(url);
-    });
-    ui.activeObjectURLs.clear();
-    */
-} 
+// export function cleanupFileBlobs() {
+//     const incomingFiles = state.incomingFiles;
+//     Object.values(incomingFiles).forEach(file => {
+//         if (file.url) {
+//             console.log(`Revoking Object URL: ${file.url}`);
+//             URL.revokeObjectURL(file.url);
+//             file.url = null; // Clear the URL after revoking
+//         }
+//     });
+//     // It might be prudent to clear the incomingFiles state here or somewhere appropriate
+//     // state.setIncomingFiles({});
+//     // console.log("Object URLs revoked and incoming files state possibly cleared.");
+// } 

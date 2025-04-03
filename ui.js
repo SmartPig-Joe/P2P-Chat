@@ -14,6 +14,22 @@ const activeObjectURLs = new Set();
 // Store the peerId associated with the currently shown context menu
 let contextMenuPeerId = null;
 
+// --- NEW: Function to cleanup Object URLs ---
+export function cleanupObjectURLs() {
+    console.log(`[Cleanup] Cleaning up ${activeObjectURLs.size} Object URLs.`);
+    activeObjectURLs.forEach(url => {
+        console.log(`[Cleanup] Revoking ObjectURL: ${url}`);
+        try {
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.warn(`[Cleanup] Error revoking ObjectURL ${url}:`, e);
+        }
+    });
+    activeObjectURLs.clear();
+    console.log("[Cleanup] Object URLs cleared.");
+}
+// --- END NEW ---
+
 /**
  * Returns the currently selected peer ID from state.
  * @returns {string | null}
@@ -565,6 +581,104 @@ export function updateFileMessageProgress(peerId, transferId, progress, download
     }
 }
 
+// --- NEW: Update File Message Status to Received (on Sender Side) ---
+/**
+ * Updates the status of a sent file message to indicate it has been received by the peer.
+ * This is called on the sender's side when a 'file_ack' message is received.
+ * @param {string} peerId The ID of the peer who sent the acknowledgment (the original receiver).
+ * @param {string} transferId The unique ID of the file transfer.
+ */
+export function updateFileMessageStatusToReceived(peerId, transferId) {
+    // --- BEGIN LOGGING ---
+    console.log(`[UI Update ACK] updateFileMessageStatusToReceived called for ack from peer ${peerId}, transfer ${transferId}`);
+    // --- END LOGGING ---
+
+    const activePeerId = state.getActiveChatPeerId();
+    // Only update UI if the acknowledged message belongs to the currently active chat
+    if (peerId !== activePeerId) {
+        // --- BEGIN LOGGING ---
+        console.log(`[UI Update ACK] Skipping update for inactive peer ${peerId} (active: ${activePeerId})`);
+        // --- END LOGGING ---
+        return;
+    }
+
+    if (dom.messageList && state.localUserId) {
+        // Find the message element sent by the local user with the matching transferId
+        // Note: data-message-id is used for transferId for file messages
+        const messageElement = dom.messageList.querySelector(`.message-item[data-message-id="${transferId}"][data-sender-id="${state.localUserId}"]`);
+
+        if (messageElement) {
+            // --- BEGIN LOGGING ---
+            console.log(`[UI Update ACK] Found message element for ${transferId} sent by local user.`);
+            // --- END LOGGING ---
+
+            // Check if the transfer is already marked as complete or failed
+            const currentState = messageElement.dataset.transferState;
+            if (currentState === 'failed') {
+                console.log(`[UI Update ACK ${transferId}] Ignoring ACK update because transfer state is already 'failed'.`);
+                return;
+            }
+            if (currentState === 'delivered') {
+                console.log(`[UI Update ACK ${transferId}] Ignoring ACK update because transfer state is already 'delivered'.`);
+                return;
+            }
+
+
+            const fileContentElement = messageElement.querySelector('.file-content');
+            if (fileContentElement) {
+                 // Read static file info from data attributes
+                const fileSize = parseInt(fileContentElement.dataset.fileSize || '0', 10);
+                const fileName = fileContentElement.dataset.fileName || 'unknown_file';
+                const fileSizeFormatted = formatBytes(fileSize); // Format the size
+
+                const statusContainer = fileContentElement.querySelector('.flex-1.min-w-0'); // Container holding name and status
+
+                if (statusContainer) {
+                    // --- BEGIN LOGGING ---
+                    console.log(`[UI Update ACK ${transferId}] Updating status text to '已送达'.`);
+                    // --- END LOGGING ---
+                    // Rebuild the status text part
+                    const filenameDiv = statusContainer.querySelector('.font-medium.text-discord-text-link');
+                    // Add double check icon for delivered status
+                    const newStatusTextHTML = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted} - 已送达 <span class="material-symbols-outlined text-xs align-middle text-discord-green">done_all</span></div>`;
+
+                    if (filenameDiv) {
+                        // Clear existing status/progress bar (everything after filename)
+                        while (filenameDiv.nextSibling) {
+                            statusContainer.removeChild(filenameDiv.nextSibling);
+                        }
+                        // Append the new "Delivered" status
+                        statusContainer.insertAdjacentHTML('beforeend', newStatusTextHTML);
+
+                         // Optionally update the main icon (e.g., keep check_circle or change?)
+                         const iconElement = fileContentElement.querySelector('.material-symbols-outlined'); // First icon
+                         if (iconElement && iconElement.textContent === 'check_circle') {
+                            // Already shows completed, maybe just add tooltip? or keep as is.
+                             iconElement.title = "文件已送达";
+                         }
+
+
+                         // Mark state as delivered to prevent further updates like reverting to "已发送"
+                         messageElement.dataset.transferState = 'delivered';
+                         console.log(`[UI Update ACK ${transferId}] Set data-transfer-state to 'delivered'.`);
+
+                    } else {
+                        console.warn(`[UI Update ACK ${transferId}] Filename div not found within status container.`);
+                    }
+                } else {
+                    console.warn(`[UI Update ACK ${transferId}] Status container (.flex-1.min-w-0) not found.`);
+                }
+            } else {
+                console.warn(`[UI Update ACK ${transferId}] Could not find .file-content within message element.`);
+            }
+        } else {
+            console.warn(`[UI Update ACK] Could not find sent message element for transfer ID: ${transferId} to update status to received.`);
+        }
+    } else if (!state.localUserId) {
+         console.error("[UI Update ACK] Cannot update file status: localUserId is not set.");
+    }
+}
+
 // --- Contact List / Member List --- // Simplified - now only one list
 
 // Re-renders the entire contact list based on state.contacts and pending requests
@@ -856,16 +970,56 @@ async function handleDeclineRequest(peerId) {
         connection.disconnectFromPeer(peerId);
     }
 }
+// --- NEW: Function to remove incoming request UI ---
+/**
+ * Removes the UI element for a pending incoming friend request.
+ * @param {string} peerId The ID of the peer whose incoming request UI should be removed.
+ */
+export function removeIncomingRequestUI(peerId) {
+    if (!dom.contactsListContainer) return;
 
+    const requestElement = dom.contactsListContainer.querySelector(`.contact-item.incoming-request[data-peer-id="${peerId}"]`);
+    if (requestElement) {
+        requestElement.remove();
+        console.log(`[UI Update] Removed incoming request UI for ${peerId}`);
+    } else {
+        console.warn(`[UI Update] Could not find incoming request UI element for ${peerId} to remove.`);
+        // Optionally re-render the list as a fallback if granular removal fails
+        // renderContactList();
+    }
+}
+// --- END NEW ---
 async function handleCancelRequest(peerId) {
     console.log(`[Friend Request] Cancelling outgoing request to ${peerId}`);
-    if (!state.hasPendingOutgoingRequest(peerId)) return;
+    if (!state.hasPendingOutgoingRequest(peerId)) {
+        console.warn(`[Friend Request] Attempted to cancel non-existent outgoing request to ${peerId}`);
+        return; // Request doesn't exist in state
+    }
 
-    // 1. Remove pending outgoing request state
-    state.removePendingOutgoingRequest(peerId);
+    // --- NEW: Attempt to send cancellation notification ---
+    console.log(`[Friend Request] Attempting to send cancellation notification to ${peerId}`);
+    const sent = await connection.sendFriendCancel(peerId); // Use await as sendP2PMessage is async
+    if (!sent) {
+        // Log the failure but proceed with local cancellation anyway.
+        // The peer will eventually figure it out or the request might remain on their side if they were offline.
+        console.warn(`[Friend Request] Failed to send cancellation notification to ${peerId} (likely offline or connection issue). Proceeding with local cancellation.`);
+        // Optionally, add a system message indicating the notification might not have been sent?
+        // addSystemMessage(`未能通知 ${peerId} 请求已取消（对方可能离线）。`, null, true);
+    } else {
+        console.log(`[Friend Request] Successfully sent cancellation notification to ${peerId}.`);
+    }
+    // --- END NEW ---
+
+    // 1. Remove pending outgoing request state (Locally)
+    const removedFromState = state.removePendingOutgoingRequest(peerId);
+    if (!removedFromState) {
+        console.error(`[Friend Request] Failed to remove outgoing request for ${peerId} from local state, though it was expected to exist.`);
+        // UI might become inconsistent. Consider re-rendering as a fallback.
+        renderContactList();
+        return;
+    }
 
     // 2. Update UI - More granularly
-    // Find and remove the pending outgoing request element
     const requestElement = dom.contactsListContainer?.querySelector(`.contact-item.outgoing-request[data-peer-id="${peerId}"]`);
     if (requestElement) {
         requestElement.remove();
@@ -875,15 +1029,13 @@ async function handleCancelRequest(peerId) {
         // Fallback to re-render if element removal fails?
         renderContactList(); // Re-render as fallback
     }
-    // No longer calling renderContactList() here.
-    addSystemMessage(`您已取消发送给 ${peerId} 的好友请求。`, null);
 
-    // 3. Optional: Send cancellation message via P2P? (Requires peer to handle it)
-    // This adds complexity. For now, just local cancellation.
-    // const sent = sendP2PMessage(peerId, { type: 'friend_cancel', payload: { cancellerId: state.localUserId } });
+    // Display local confirmation message
+    addSystemMessage(`您已取消发送给 ${peerId} 的好友请求。`, null);
 
     // 4. Optional: Disconnect if connected (connection might exist from initial request attempt)
     if (state.getConnectionState(peerId) === 'connected') {
+        console.log(`[Friend Request] Disconnecting from ${peerId} after cancelling request.`);
         connection.disconnectFromPeer(peerId);
     }
 }
@@ -1130,7 +1282,7 @@ function showContextMenu(event, peerId) {
     if (!targetElement || !targetElement.classList.contains('confirmed-contact')) {
          console.log("Context menu attempt on non-confirmed contact. Ignoring.");
          hideContextMenu(); // Ensure any previous menu is hidden
-         return;
+        return;
     }
 
     contextMenuPeerId = peerId; // Store the peer ID for the action

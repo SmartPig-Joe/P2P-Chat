@@ -321,5 +321,32 @@ async function initializeApp() {
     }
 }
 
-// --- Start Application ---
-document.addEventListener('DOMContentLoaded', initializeApp); 
+// --- NEW: Cleanup on page close ---
+window.addEventListener('unload', () => {
+    console.log("Page is unloading. Cleaning up resources...");
+
+    // Cleanup Object URLs
+    ui.cleanupObjectURLs();
+
+    // Disconnect all peers (closes data channels and peer connections)
+    // Ensure state reflects the disconnect for potential reconnect logic if needed
+    Object.keys(state.peerConnections).forEach(peerId => {
+        console.log(`Unload: Disconnecting from ${peerId}`);
+        connection.disconnectFromPeer(peerId); // This should handle closing PC and DC
+    });
+
+    // Close WebSocket connection if open
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        console.log("Unload: Closing WebSocket connection.");
+        state.ws.close(1000, "Page closed"); // Use 1000 for normal closure
+    }
+
+    // Stop any pending typing indicators
+    stopLocalTypingIndicator();
+
+    console.log("Resource cleanup on unload completed.");
+});
+// --- END NEW ---
+
+// Start the application
+initializeApp(); 

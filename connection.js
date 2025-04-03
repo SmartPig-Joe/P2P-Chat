@@ -636,6 +636,47 @@ async function setupDataChannelEvents(peerId, dc) {
                     disconnectFromPeer(originalSenderId);
                     break;
 
+                // --- NEW: Handle Friend Request Cancellation ---
+                case 'friend_cancel':
+                    console.log(`[Friend Request] Received friend_cancel from ${originalSenderId}:`, payload);
+                    // Validate payload
+                    if (!payload.cancellerId || payload.cancellerId !== originalSenderId) {
+                        console.warn(`[Friend Request] Invalid cancellerId in cancel message from ${originalSenderId}. Ignoring.`);
+                        return;
+                    }
+                    // Check if we have a pending incoming request from this user
+                    if (!state.hasPendingIncomingRequest(originalSenderId)) {
+                         console.warn(`[Friend Request] Received unexpected cancel from ${originalSenderId} (no pending incoming request found). Ignoring.`);
+                         return;
+                    }
+
+                    // Process cancellation
+                    const removed = state.removePendingIncomingRequest(originalSenderId); // Remove from state
+                    if (removed) {
+                        console.log(`[Friend Request] Removed pending incoming request from ${originalSenderId} due to cancellation.`);
+                        ui.removeIncomingRequestUI(originalSenderId); // Remove from UI
+                        ui.addSystemMessage(`${state.contacts[originalSenderId]?.name || originalSenderId} 已取消其好友请求。`, null);
+                    } else {
+                         console.warn(`[Friend Request] State indicates pending request from ${originalSenderId} exists, but removal failed.`);
+                         // Might need a full UI re-render as fallback
+                         ui.renderContactList();
+                    }
+                    break;
+                // --- END NEW ---
+
+                // --- NEW: Handle File Acknowledgement ---
+                case 'file_ack':
+                    if (payload.transferId) {
+                        console.log(`Received file ACK for transfer ${payload.transferId} from ${originalSenderId}`);
+                        // Update UI for the sender to show the file was received.
+                        // We need a new UI function for this.
+                        ui.updateFileMessageStatusToReceived(originalSenderId, payload.transferId);
+                    } else {
+                        console.warn(`Received invalid file_ack from ${originalSenderId}: Missing transferId.`);
+                    }
+                    break;
+                // --- END NEW ---
+
                 default:
                     console.log(`Received unhandled structured message type: ${messageType} from ${originalSenderId}`);
                     break;
@@ -969,7 +1010,10 @@ async function sendP2PMessage(peerId, messageObject) { // Made async
             // --- ENCRYPTION --- 
             let dataToSend;
             const keys = state.getPeerKeys(peerId);
-            if (keys && keys.sharedKey) { // Check if shared key exists for this peer
+            // --- MODIFICATION: Define message types NOT to encrypt ---
+            const plaintextMessageTypes = ['publicKey', 'friend_request', 'friend_accept', 'friend_decline', 'friend_cancel']; // Add friend_cancel
+
+            if (keys && keys.sharedKey && !plaintextMessageTypes.includes(messageObject.type)) { // Check if shared key exists AND type should be encrypted
                 console.log(`Encrypting message of type ${messageObject.type} for ${peerId}`);
                 const encryptedPayload = await crypto.encryptMessage(peerId, JSON.stringify(messageObject));
                 // Wrap encrypted data with a specific type
@@ -979,8 +1023,8 @@ async function sendP2PMessage(peerId, messageObject) { // Made async
                 });
                 console.log(`Sending encrypted message wrapper to ${peerId}`);
             } else {
-                 // No shared key yet, send plaintext (e.g., for publicKey messages, friend requests before key exchange)
-                 console.warn(`No shared key for ${peerId}. Sending message type ${messageObject.type} in plaintext.`);
+                 // No shared key yet OR type should be plaintext
+                 console.log(`Sending message type ${messageObject.type} to ${peerId} in plaintext.`);
                  dataToSend = JSON.stringify(messageObject);
             }
             // --- END ENCRYPTION ---
@@ -1070,6 +1114,36 @@ export async function sendFriendDecline(peerId) { // Made async
         }
     };
     return await sendP2PMessage(peerId, declineMessage);
+}
+
+// --- NEW: Function to send friend request cancellation via P2P (async) ---
+export async function sendFriendCancel(peerId) { // Made async
+    const cancelMessage = {
+        type: 'friend_cancel',
+        payload: {
+            cancellerId: state.localUserId, // Include canceller ID
+            timestamp: Date.now()
+        }
+    };
+    console.log(`Sending friend_cancel to ${peerId}`);
+    // Send plaintext
+    return await sendP2PMessage(peerId, cancelMessage);
+}
+
+// --- NEW: Function to send file acknowledgement ---
+export async function sendFileAck(peerId, transferId) { // Made async
+    if (!peerId || !transferId) {
+        console.warn("sendFileAck called with missing peerId or transferId");
+        return false;
+    }
+
+    const ackMessage = {
+        type: 'file_ack',
+        payload: { transferId: transferId }
+    };
+
+    console.log(`Sending file ACK for ${transferId} to ${peerId}`);
+    return await sendP2PMessage(peerId, ackMessage);
 }
 
 export async function loadAndDisplayHistory(peerId) {
