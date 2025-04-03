@@ -2,12 +2,14 @@
 
 // Define the key for localStorage
 const LOCAL_USER_ID_KEY = 'p2pChatLocalUserId';
+const LOCAL_NICKNAME_KEY = 'p2pChatLocalNickname'; // New key for nickname
+const LOCAL_AVATAR_KEY = 'p2pChatLocalAvatar';   // New key for avatar
 const CONTACTS_STORAGE_KEY = 'p2pChatContacts'; // Key for contacts in localStorage
 const PENDING_INCOMING_REQUESTS_KEY = 'p2pChatPendingIncoming'; // Key for pending incoming requests (optional persistence)
 const PENDING_OUTGOING_REQUESTS_KEY = 'p2pChatPendingOutgoing'; // Key for pending outgoing requests (optional persistence)
 
-// Function to get or generate the local user ID
-function initializeLocalUserId() {
+// Function to get or generate the local user ID, nickname, and avatar
+function initializeLocalProfile() {
     let userId = localStorage.getItem(LOCAL_USER_ID_KEY);
     if (!userId) {
         userId = `user-${Math.random().toString(36).substring(2, 8)}`;
@@ -20,12 +22,45 @@ function initializeLocalUserId() {
     } else {
         console.log('Retrieved local user ID from localStorage:', userId);
     }
-    return userId;
+
+    // Initialize nickname
+    let nickname = localStorage.getItem(LOCAL_NICKNAME_KEY);
+    if (!nickname) {
+        nickname = userId; // Default nickname to user ID
+        try {
+            localStorage.setItem(LOCAL_NICKNAME_KEY, nickname);
+            console.log('Initialized default nickname:', nickname);
+        } catch (e) {
+            console.error('Failed to save default nickname to localStorage:', e);
+        }
+    } else {
+        console.log('Retrieved nickname from localStorage:', nickname);
+    }
+
+    // Initialize avatar (using a simple placeholder/default for now)
+    let avatar = localStorage.getItem(LOCAL_AVATAR_KEY);
+    if (!avatar) {
+        avatar = 'default_avatar.png'; // You might want a better default or logic
+        try {
+            localStorage.setItem(LOCAL_AVATAR_KEY, avatar);
+            console.log('Initialized default avatar:', avatar);
+        } catch (e) {
+            console.error('Failed to save default avatar to localStorage:', e);
+        }
+    } else {
+        console.log('Retrieved avatar from localStorage:', avatar);
+    }
+
+
+    return { userId, nickname, avatar };
 }
 
 // --- Global State ---
 export let ws = null; // Single WebSocket connection
-export const localUserId = initializeLocalUserId(); // Unique ID for this client
+const initialProfile = initializeLocalProfile(); // Initialize user profile
+export const localUserId = initialProfile.userId; // Unique ID for this client (immutable)
+export let localUserNickname = initialProfile.nickname; // User's chosen nickname (mutable)
+export let localUserAvatar = initialProfile.avatar; // User's chosen avatar (mutable)
 export let localKeyPair = null; // Cryptographic key pair for this client
 export let contacts = {}; // { peerId: { id: string, name: string, online: boolean | 'connecting' } }
 export let activeChatPeerId = null; // Which peer's chat window is currently active
@@ -581,4 +616,34 @@ export function resetConnectionState() {
 // NEW: Check WebSocket connection status
 export function isSignalingConnected() {
     return ws && ws.readyState === WebSocket.OPEN;
+}
+
+// --- NEW: Functions to update local user profile ---
+export function setLocalNickname(newNickname) {
+    if (newNickname && newNickname.trim()) {
+        localUserNickname = newNickname.trim();
+        try {
+            localStorage.setItem(LOCAL_NICKNAME_KEY, localUserNickname);
+            console.log('Updated and saved local nickname:', localUserNickname);
+            // TODO: Notify peers about the nickname change
+            // broadcastProfileUpdate(); // Example function call
+        } catch (e) {
+            console.error('Failed to save nickname to localStorage:', e);
+        }
+    }
+}
+
+export function setLocalAvatar(newAvatar) {
+    // Basic validation, adjust as needed (e.g., check if it's a valid URL or identifier)
+    if (newAvatar && newAvatar.trim()) {
+        localUserAvatar = newAvatar.trim();
+        try {
+            localStorage.setItem(LOCAL_AVATAR_KEY, localUserAvatar);
+            console.log('Updated and saved local avatar:', localUserAvatar);
+            // TODO: Notify peers about the avatar change
+            // broadcastProfileUpdate(); // Example function call
+        } catch (e) {
+            console.error('Failed to save avatar to localStorage:', e);
+        }
+    }
 } 

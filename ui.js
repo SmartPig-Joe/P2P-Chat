@@ -4,6 +4,8 @@ import * as state from './state.js';
 import { escapeHTML, formatTime, getUserColorClass, formatBytes } from './utils.js';
 import * as connection from './connection.js'; // Import connection to call loadAndDisplayHistory
 import * as storage from './storage.js'; // Import storage for potential future use (e.g., removing contacts)
+// --- NEW: Import state functions needed for profile editing ---
+import { localUserId, localUserNickname, localUserAvatar, setLocalNickname, setLocalAvatar } from './state.js';
 
 // Remove global selectedPeerId, use state.activeChatPeerId
 // let selectedPeerId = null; // DEPRECATED
@@ -177,7 +179,8 @@ function createMessageHTML(message) {
     if (senderId) {
         isLocal = senderId === state.localUserId;
         senderName = isLocal
-            ? (state.contacts[state.localUserId]?.name || '我')
+            // --- MODIFIED: Use localUserNickname for self ---
+            ? state.localUserNickname // Use the state variable
             : (state.contacts[senderId]?.name || senderId);
     } else {
         console.warn('Message object missing senderId:', message);
@@ -222,9 +225,14 @@ function createMessageHTML(message) {
     const dataAttributes = `data-message-id="${message.id}" data-sender-id="${senderId}" data-timestamp="${message.timestamp}"`;
     const messageClasses = `flex items-start space-x-3 group message-item py-1 pr-4 hover:bg-discord-gray-4/30 rounded ${message.type === 'fileMeta' ? 'file-message-container' : ''}`;
 
+    // --- MODIFIED: Use local user info for self-avatar ---
+    const avatarSrc = isLocal
+        ? ((state.localUserAvatar && state.localUserAvatar !== 'default_avatar.png') ? escapeHTML(state.localUserAvatar) : `https://placehold.co/40x40/${getAvatarColor(senderId)}/ffffff?text=${escapeHTML(senderName.charAt(0).toUpperCase())}`) // Use state avatar if valid, else fallback
+        : `https://placehold.co/40x40/${avatarColor}/ffffff?text=${escapeHTML(senderName.charAt(0).toUpperCase())}`; // Default for others
+
     return (
        `<div class="${messageClasses}" ${dataAttributes}>
-            <img src="https://placehold.co/40x40/${avatarColor}/ffffff?text=${avatarText}" alt="${senderNameEscaped} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer" title="${senderNameEscaped} (${senderId})" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">
+            <img src="${avatarSrc}" alt="${senderNameEscaped} 头像" class="rounded-full mt-1 flex-shrink-0 cursor-pointer w-10 h-10 object-cover" title="${senderNameEscaped} (${senderId})" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">
             <div class="flex-1">
                 <div class="flex items-baseline space-x-2">
                     <span class="${userColorClass} font-medium hover:underline cursor-pointer">${senderNameEscaped}</span>
@@ -1291,29 +1299,69 @@ export function updateChatInputVisibility(forceVisible = null) {
 
 // Display local user ID (e.g., in settings or profile area)
 export function displayLocalUserInfo() {
-    if (dom.localUserIdSpan) {
-        dom.localUserIdSpan.textContent = state.localUserId;
-        dom.localUserIdSpan.title = '这是您的唯一ID，分享给朋友以添加您为联系人';
-    }
-    // Optionally display local user name if configurable
-    // const localName = state.contacts[state.localUserId]?.name || state.localUserId;
-    // if (dom.localUserNameSpan) { dom.localUserNameSpan.textContent = localName; }
+    console.log("[Debug] displayLocalUserInfo called. Checking dom.localUserInfoDiv:", dom.localUserInfoDiv);
+    if (dom.localUserInfoDiv) {
+        const userId = state.localUserId;
+        const nickname = state.localUserNickname || userId; // Fallback to userId if nickname is unset
+        const avatar = state.localUserAvatar || 'default_avatar.png'; // Fallback avatar
 
-    // Add copy functionality
-    const copyButton = dom.localUserIdSpan?.parentElement?.querySelector('button');
-    if (dom.localUserIdSpan && copyButton) {
-        copyButton.onclick = () => {
-            navigator.clipboard.writeText(state.localUserId).then(() => {
-                 console.log('Local user ID copied to clipboard!');
-                 // Simple visual feedback
-                 const originalText = copyButton.innerHTML;
-                 copyButton.innerHTML = '<span class="material-symbols-outlined text-sm">check</span>';
-                 setTimeout(() => { copyButton.innerHTML = originalText; }, 1500);
-            }).catch(err => {
-                 console.error('Failed to copy local user ID: ', err);
-                 // Show error feedback?
+        console.log(`[Debug] User info data: ID=${userId}, Nickname=${nickname}, Avatar=${avatar}`);
+
+        // Generate placeholder color/text if using default avatar
+        const avatarPlaceholderColor = getAvatarColor(userId);
+        const avatarPlaceholderText = escapeHTML(nickname.charAt(0).toUpperCase());
+        const avatarSrc = (avatar && avatar !== 'default_avatar.png' && (avatar.startsWith('http:') || avatar.startsWith('https:')))
+            ? escapeHTML(avatar)
+            : `https://placehold.co/40x40/${avatarPlaceholderColor}/ffffff?text=${avatarPlaceholderText}`;
+
+        const userInfoHTML = `
+            <div class="flex items-center space-x-3 p-2 hover:bg-discord-gray-5/30 rounded relative group">
+                 <img src="${avatarSrc}" alt="本地用户头像" class="w-10 h-10 rounded-full bg-discord-gray-4 object-cover" onerror="this.src='https://placehold.co/40x40/2c2f33/ffffff?text=Err'">
+                 <div class="flex-1 min-w-0">
+                    <div class="font-semibold text-discord-text-primary truncate" title="${escapeHTML(nickname)}">${escapeHTML(nickname)}</div>
+                    <div class="text-xs text-discord-text-muted truncate" title="${userId}">ID: ${userId} <button id="copy-user-id-btn" class="ml-1 text-xs text-discord-text-link hover:text-discord-text-link-hover opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="复制 ID"><span class="material-symbols-outlined text-sm align-middle">content_copy</span></button></div>
+                 </div>
+                 <button id="edit-profile-btn" class="ml-auto p-1 text-discord-text-muted hover:text-discord-text-primary opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100" title="编辑个人资料">
+                     <span class="material-symbols-outlined text-lg align-middle">edit</span>
+                 </button>
+            </div>
+        `;
+
+        console.log("[Debug] Generated userInfoHTML:", userInfoHTML);
+        dom.localUserInfoDiv.innerHTML = userInfoHTML;
+
+        // Add event listener for copy button
+        const copyBtn = dom.localUserInfoDiv.querySelector('#copy-user-id-btn');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent triggering contact click if nested
+                navigator.clipboard.writeText(userId)
+                    .then(() => {
+                        console.log('User ID copied to clipboard');
+                        // Optional: Show brief feedback
+                        const originalText = copyBtn.innerHTML;
+                        copyBtn.innerHTML = '<span class="material-symbols-outlined text-sm align-middle text-discord-green">check</span>';
+                        setTimeout(() => { copyBtn.innerHTML = originalText; }, 1500);
+                    })
+                    .catch(err => {
+                        console.error('Failed to copy user ID: ', err);
+                        alert('复制失败: ' + err);
+                    });
             });
-        };
+        }
+
+        // Add event listener for edit profile button
+        const editBtn = dom.localUserInfoDiv.querySelector('#edit-profile-btn');
+        if (editBtn) {
+            editBtn.addEventListener('click', (e) => {
+                 e.stopPropagation();
+                showProfileEditModal();
+            });
+        }
+
+    } else {
+        // Don't log error here if called early during init before DOM is ready
+        // console.error("Local user info container not found.");
     }
 }
 
@@ -1649,7 +1697,7 @@ export function initializeUI() {
     renderContactList();
     // Set initial empty state message
     updateEmptyState();
-    // Display local user info
+    // Display local user info (This might run before DOM is ready, error handled inside)
     displayLocalUserInfo();
     // Set initial chat input visibility (hidden)
     updateChatInputVisibility(false);
@@ -1661,11 +1709,34 @@ export function initializeUI() {
     // Hide context menu initially
     hideContextMenu();
 
+    // --- MODIFIED: Inject and setup profile edit modal ---
+    const profileEditHTML = createProfileEditSectionHTML();
+    document.body.insertAdjacentHTML('beforeend', profileEditHTML); // Add modal to the body
+
+    const saveBtn = document.getElementById('save-profile-edit-btn');
+    const cancelBtn = document.getElementById('cancel-profile-edit-btn');
+    const modal = document.getElementById('profile-edit-modal');
+
+    if (saveBtn) {
+        saveBtn.addEventListener('click', handleProfileSave);
+    }
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', hideProfileEditModal);
+    }
+     // Close modal if clicking outside the content
+    if (modal) {
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) { // Check if the click is on the background overlay
+                hideProfileEditModal();
+            }
+        });
+    }
+    // --- END MODIFIED ---
+
+    // Display initial user info AGAIN (This call should work if DOM is ready)
+    displayLocalUserInfo();
     console.log("UI Initialized.");
 }
-
-// Call initialization function once DOM is ready (usually done in main.js)
-// initializeUI(); 
 
 // --- NEW: Update Request Section Headers ---
 /**
@@ -1722,3 +1793,100 @@ function updateRequestSectionHeaders() {
     }
 }
 // --- END NEW ---
+
+// --- ADDED: Profile Editing Elements and Logic ---
+
+function createProfileEditSectionHTML() {
+    return `
+        <div id="profile-edit-modal" class="hidden fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+            <div class="bg-discord-gray-2 p-6 rounded-lg shadow-xl max-w-sm w-full">
+                <h3 class="text-lg font-semibold mb-4 text-discord-text-primary">编辑个人资料</h3>
+                <div class="mb-4">
+                    <label for="nickname-input" class="block text-sm font-medium text-discord-text-muted mb-1">昵称</label>
+                    <input type="text" id="nickname-input" class="w-full p-2 bg-discord-gray-3 border border-discord-gray-5 rounded text-discord-text-primary focus:outline-none focus:ring-2 focus:ring-discord-blurple">
+                </div>
+                <div class="mb-6">
+                    <label for="avatar-url-input" class="block text-sm font-medium text-discord-text-muted mb-1">头像 URL</label>
+                    <input type="url" id="avatar-url-input" placeholder="https://example.com/avatar.png" class="w-full p-2 bg-discord-gray-3 border border-discord-gray-5 rounded text-discord-text-primary focus:outline-none focus:ring-2 focus:ring-discord-blurple">
+                     <p class="text-xs text-discord-text-muted mt-1">输入有效的图像 URL。</p>
+                </div>
+                <div class="flex justify-end space-x-3">
+                    <button id="cancel-profile-edit-btn" class="px-4 py-2 bg-discord-gray-4 hover:bg-discord-gray-5 text-discord-text-primary rounded transition duration-150">取消</button>
+                    <button id="save-profile-edit-btn" class="px-4 py-2 bg-discord-blurple hover:bg-discord-blurple-dark text-white rounded transition duration-150">保存</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function showProfileEditModal() {
+    const modal = document.getElementById('profile-edit-modal');
+    const nicknameInput = document.getElementById('nickname-input');
+    const avatarInput = document.getElementById('avatar-url-input');
+
+    // Ensure elements exist before accessing properties
+    if (!modal || !nicknameInput || !avatarInput) {
+        console.error("Profile edit modal elements not found!");
+        return;
+    }
+
+    // Populate with current values
+    nicknameInput.value = state.localUserNickname;
+    avatarInput.value = state.localUserAvatar && state.localUserAvatar !== 'default_avatar.png' ? state.localUserAvatar : ''; // Show current URL or empty
+
+    modal.classList.remove('hidden');
+}
+
+function hideProfileEditModal() {
+    const modal = document.getElementById('profile-edit-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+    }
+}
+
+function handleProfileSave() {
+    const nicknameInput = document.getElementById('nickname-input');
+    const avatarInput = document.getElementById('avatar-url-input');
+
+    // Ensure elements exist
+    if (!nicknameInput || !avatarInput) {
+        console.error("Cannot save profile: Input elements not found.");
+        hideProfileEditModal(); // Hide modal even if save fails
+        return;
+    }
+
+    const newNickname = nicknameInput.value.trim();
+    let newAvatar = avatarInput.value.trim();
+
+    if (newNickname) {
+        state.setLocalNickname(newNickname);
+    }
+
+    // If avatar input is empty, revert to default
+    if (newAvatar) {
+         // Basic URL validation (can be improved)
+        if (newAvatar.startsWith('http://') || newAvatar.startsWith('https://')) {
+            state.setLocalAvatar(newAvatar);
+        } else {
+            console.warn("Invalid Avatar URL provided:", newAvatar);
+            alert("请输入有效的头像 URL (以 http:// 或 https:// 开头)。");
+            return; // Don't save or close modal if URL is invalid
+        }
+    } else {
+        state.setLocalAvatar('default_avatar.png'); // Revert to default if input is empty
+    }
+
+    hideProfileEditModal();
+    displayLocalUserInfo(); // Re-render user info panel
+    renderContactList(); // Re-render contact list to show updated self-name/avatar if needed there
+    // Re-render active chat messages if local user sent messages
+    const activePeerId = state.getActiveChatPeerId();
+    if(activePeerId) {
+        connection.loadAndDisplayHistory(activePeerId); // Reload history to update sender's avatar/name in messages
+    }
+
+    // TODO: Trigger broadcastProfileUpdate() here via connection module if implemented
+    // connection.broadcastProfileUpdate({ nickname: state.localUserNickname, avatar: state.localUserAvatar });
+}
+
+// --- END ADDED ---

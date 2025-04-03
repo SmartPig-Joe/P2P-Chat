@@ -14,6 +14,7 @@ export const typingUsersSpan = document.getElementById('typing-users');
 // export const offlineCountSpan = document.getElementById('offline-count'); // Removed - not used
 // export const connectionStatusSpan = document.getElementById('connection-status'); // Removed - not used
 export const localUserIdSpan = document.getElementById('local-user-id-display');
+export const localUserInfoDiv = document.getElementById('local-user-info');
 // export const remoteUserIdInput = document.getElementById('remote-user-id-input'); // Removed - not used
 // export const connectButton = document.getElementById('connect-button'); // Removed - not used
 // export const chatInputArea = document.querySelector('.chat-input-area'); // Updated selector // REMOVE THIS LINE

@@ -358,5 +358,9 @@ window.addEventListener('unload', () => {
 });
 // --- END NEW ---
 
-// Start the application
-initializeApp(); 
+// 确保 initializeApp() 在 DOM 加载完成后才执行
+document.addEventListener('DOMContentLoaded', () => {
+  initializeApp();
+});
+
+// 不要在这里或者其他地方再次直接调用 initializeApp() 
