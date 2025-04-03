@@ -381,6 +381,11 @@ async function setupDataChannelEvents(peerId, dc) {
              ui.addSystemMessage(`无法发送公钥：本地密钥对不可用。`, peerId, true);
         }
         // --- END NEW --- 
+
+        // --- Send Profile Info on Open --- // 
+        console.log(`[Connection dc.onopen] Data channel open for ${peerId}. Attempting to send profile info.`); // <-- ADD LOG
+        sendProfileInfo(peerId); // Call the function to send profile info
+        // --- END --- //
     };
 
     dc.onclose = () => {
@@ -695,6 +700,32 @@ async function setupDataChannelEvents(peerId, dc) {
                     ui.showNotFriendError(originalSenderId); // Notify UI
                     break;
                 // --- END NEW ---
+
+                // --- NEW: Handle Profile Info --- //
+                case 'profile_info':
+                    console.log(`[Profile] Received profile info from ${originalSenderId}:`, payload);
+                    if (payload && (payload.nickname || payload.avatar)) {
+                        const updated = state.updateContactDetails(originalSenderId, {
+                            nickname: payload.nickname,
+                            avatar: payload.avatar
+                        });
+                        console.log(`[Profile] state.updateContactDetails returned: ${updated}`);
+                        if (updated) {
+                            console.log(`[Profile] Updated contact details for ${originalSenderId}. Triggering UI update.`);
+                            // Re-render the entire contact list to show the updated name/avatar
+                            ui.renderContactList(); 
+                            // If this chat is currently active, also update the chat header
+                            if (state.isActiveChat(originalSenderId)) {
+                                ui.updateChatHeader(originalSenderId);
+                            }
+                        } else {
+                             console.log(`[Profile] Received profile info for ${originalSenderId}, but no changes were applied.`);
+                        }
+                    } else {
+                        console.warn(`[Profile] Received profile_info message from ${originalSenderId} with invalid payload:`, payload);
+                    }
+                    break;
+                // --- END NEW --- //
 
                 default:
                     console.log(`Received unhandled structured message type: ${messageType} from ${originalSenderId}`);
@@ -1212,3 +1243,27 @@ async function sendNotFriendError(peerId) {
     await sendP2PMessage(peerId, errorMessage, true); // Assuming sendP2PMessage can take a flag to force plaintext
 }
 // --- END NEW ---
+
+// --- NEW: Function to send local profile info --- //
+function sendProfileInfo(peerId) {
+    const dataChannel = state.getDataChannel(peerId);
+    if (dataChannel && dataChannel.readyState === 'open') {
+        console.log(`[Profile] Sending profile info to ${peerId}`);
+        const profileMessage = {
+            type: 'profile_info',
+            payload: {
+                nickname: state.localUserNickname,
+                avatar: state.localUserAvatar
+            }
+        };
+        try {
+            dataChannel.send(JSON.stringify(profileMessage));
+            console.log(`[Profile] Sent profile info to ${peerId}:`, profileMessage.payload);
+        } catch (error) {
+            console.error(`[Profile] Failed to send profile info to ${peerId}:`, error);
+        }
+    } else {
+        console.warn(`[Profile] Cannot send profile info to ${peerId}: Data channel not open or available.`);
+    }
+}
+// --- END NEW --- //

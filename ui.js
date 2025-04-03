@@ -771,8 +771,10 @@ function createContactItemElement(contact) {
     element.dataset.contactType = 'confirmed'; // Mark as confirmed
 
     const avatarColor = getAvatarColor(contact.id);
-    const avatarText = escapeHTML((contact.name || contact.id).charAt(0).toUpperCase());
-    const nameEscaped = escapeHTML(contact.name || contact.id);
+    const nameOrId = contact.name || contact.id; // Use name, fallback to ID
+    const avatarText = escapeHTML(nameOrId.charAt(0).toUpperCase());
+    const nameEscaped = escapeHTML(nameOrId);
+    const idEscaped = escapeHTML(contact.id);
 
     // Status Indicator Logic (remains the same)
     let statusIndicatorHTML = '';
@@ -791,15 +793,20 @@ function createContactItemElement(contact) {
     // Unread Indicator Placeholder (remains the same)
     const unreadIndicatorHTML = '<span class="bg-discord-red w-2 h-2 rounded-full ml-auto hidden unread-indicator"></span>';
 
+    // --- MODIFIED: Display Name and ID --- //
     element.innerHTML = `
         <div class="relative flex-shrink-0">
-            <img src="https://placehold.co/32x32/${avatarColor}/ffffff?text=${avatarText}" alt="${nameEscaped} 头像" class="rounded-full" title="${nameEscaped} (${contact.id}) - ${statusTitle}">
+            <img src="https://placehold.co/32x32/${avatarColor}/ffffff?text=${avatarText}" alt="${nameEscaped} 头像" class="rounded-full" title="${nameEscaped} (${idEscaped}) - ${statusTitle}">
             ${statusIndicatorHTML}
         </div>
-        <span class="flex-1 text-discord-text-primary truncate font-medium text-sm contact-name">${nameEscaped}</span>
+        <div class="flex-1 min-w-0">
+             <div class="text-discord-text-primary truncate font-medium text-sm contact-name" title="${nameEscaped}">${nameEscaped}</div>
+             <div class="text-xs text-discord-text-muted truncate contact-id" title="${idEscaped}">ID: ${idEscaped}</div>
+        </div>
         ${unreadIndicatorHTML}
         <!-- Action buttons could be added via context menu -->
     `;
+    // --- END MODIFICATION ---
 
     // Add click listener to select chat (only for confirmed contacts)
     element.addEventListener('click', handleContactClick);

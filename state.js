@@ -324,7 +324,8 @@ export function loadContacts() {
                      validatedContacts[contact.id] = {
                         id: contact.id,
                         name: contact.name || contact.id, // Default name to ID
-                        online: false // ALWAYS initialize as offline on load
+                        online: false, // ALWAYS initialize as offline on load
+                        avatar: contact.avatar || 'default_avatar.png' // Use provided avatar or default
                     };
                 }
             });
@@ -342,17 +343,57 @@ export function loadContacts() {
 
 export function saveContacts() {
     try {
-        // Only save ID and name, not transient online status
+        // Save ID, name, and NOW avatar
         const contactsToSave = {};
         Object.values(contacts).forEach(contact => {
-            contactsToSave[contact.id] = { id: contact.id, name: contact.name };
+            contactsToSave[contact.id] = { id: contact.id, name: contact.name, avatar: contact.avatar }; // Include avatar
         });
         localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contactsToSave));
-        console.log("Saved contacts (ID and name only) to localStorage:", contactsToSave);
+        console.log("Saved contacts (ID, name, avatar) to localStorage:", contactsToSave);
     } catch (e) {
         console.error("Failed to save contacts to localStorage:", e);
     }
 }
+
+// --- NEW: Function to update details for an existing contact --- //
+export function updateContactDetails(peerId, details) { // details: { nickname?: string, avatar?: string }
+    console.log(`[State updateContactDetails] Called for peer: ${peerId} with details:`, details); // <-- ADD LOG
+
+    if (!contacts[peerId]) {
+        console.warn(`[State] Attempted to update details for non-existent contact: ${peerId}`);
+        return false;
+    }
+
+    let changed = false;
+    const contact = contacts[peerId];
+    const oldContactState = { ...contact }; // <-- ADD LOG (Capture old state)
+
+    // Update nickname if provided and different
+    if (details.nickname && typeof details.nickname === 'string' && contact.name !== details.nickname.trim()) {
+        contact.name = details.nickname.trim();
+        console.log(`[State] Updated contact ${peerId} nickname to: ${contact.name}`);
+        changed = true;
+    }
+
+    // Update avatar if provided and different
+    // Ensure we handle null/undefined/empty string vs. 'default_avatar.png'
+    const newAvatar = (details.avatar && typeof details.avatar === 'string') ? details.avatar.trim() : 'default_avatar.png';
+    if (contact.avatar !== newAvatar) {
+        contact.avatar = newAvatar;
+        console.log(`[State] Updated contact ${peerId} avatar to: ${contact.avatar}`);
+        changed = true;
+    }
+
+    if (changed) {
+        console.log(`[State updateContactDetails] Changes detected for ${peerId}. Old state:`, oldContactState, "New state:", contact); // <-- ADD LOG
+        // Save contacts if any details were actually updated
+        saveContacts();
+    } else {
+         console.log(`[State updateContactDetails] No changes applied for ${peerId}.`); // <-- ADD LOG
+    }
+    return changed;
+}
+// --- END NEW --- //
 
 // Modified addContact: Now potentially called when accepting a request
 // Need to ensure we don't re-add if already exists
@@ -387,7 +428,8 @@ export function addContact(peerId, name = null) {
     const newContact = {
         id: trimmedId,
         name: nameToUse,
-        online: false // Initialize as offline, status updated by connection logic
+        online: false, // Initialize as offline, status updated by connection logic
+        avatar: 'default_avatar.png' // Use default avatar
     };
     const updatedContacts = { ...contacts, [trimmedId]: newContact };
     setContacts(updatedContacts);
