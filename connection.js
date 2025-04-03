@@ -271,7 +271,6 @@ function setupPeerConnectionEvents(peerId, pc) {
                  console.log(`Overall connection established for ${peerId}.`);
                  const dc = state.getDataChannel(peerId);
                  if (dc?.readyState === 'open') {
-                    clearConnectionTimeout(peerId);
                     state.updateContactStatus(peerId, true);
                     ui.updateContactStatusUI(peerId, true);
                  } else {
@@ -338,32 +337,57 @@ function setupPeerConnectionEvents(peerId, pc) {
 async function setupDataChannelEvents(peerId, dc) {
     console.log(`Setting up data channel (${dc.label}) events for peer: ${peerId}`);
 
-    dc.onopen = () => {
-        console.log(`Data channel opened for peer ${peerId}`);
+    dc.onopen = async () => {
+        console.log(`[General Handler] Data channel opened for peer ${peerId}`);
         state.updateDataChannelState(peerId, 'open');
 
         const pc = state.getPeerConnection(peerId);
         if (pc && (pc.connectionState === 'connected' || pc.connectionState === 'completed')) {
-           clearConnectionTimeout(peerId);
            state.updateContactStatus(peerId, true);
            ui.updateContactStatusUI(peerId, true);
            if (state.isActiveChat(peerId)) {
                  ui.updateChatInputVisibility();
            }
-           ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的安全连接已建立。`, peerId);
-
+           // Don't show "secure connection" message here yet, wait for friend acceptance?
+           // ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的安全连接已建立。`, peerId);
         } else {
              console.warn(`Data channel for ${peerId} opened, but overall connection state is ${pc?.connectionState}. Waiting.`);
              state.updateContactStatus(peerId, 'connecting');
              ui.updateContactStatusUI(peerId, 'connecting');
         }
 
+        // --- NEW: Send Public Key on Data Channel Open ---
+        if (state.localKeyPair && state.localKeyPair.publicKey) {
+            try {
+                const publicKeyJwk = await crypto.exportPublicKey(state.localKeyPair.publicKey);
+                if (publicKeyJwk) {
+                    const keyMessage = {
+                        type: 'publicKey',
+                        payload: { jwk: publicKeyJwk }
+                    };
+                    await sendP2PMessage(peerId, keyMessage);
+                    console.log(`Sent public key to ${peerId}`);
+                } else {
+                     console.error(`Failed to export local public key for sending to ${peerId}.`);
+                     // Consider adding a system message or other error handling
+                     ui.addSystemMessage(`无法导出本地公钥以发送给 ${state.contacts[peerId]?.name || peerId}。`, peerId, true);
+                }
+            } catch (error) {
+                console.error(`Error exporting or sending public key to ${peerId}:`, error);
+                 ui.addSystemMessage(`发送公钥给 ${state.contacts[peerId]?.name || peerId} 时出错。`, peerId, true);
+            }
+        } else {
+             console.warn(`Cannot send public key to ${peerId}: Local key pair not available.`);
+             ui.addSystemMessage(`无法发送公钥：本地密钥对不可用。`, peerId, true);
+        }
+        // --- END NEW --- 
     };
 
     dc.onclose = () => {
-        console.log(`Data channel closed for peer ${peerId}`);
+        console.log(`[General Handler] Data channel closed for peer ${peerId}`);
          state.updateDataChannelState(peerId, 'closed');
-         ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的数据通道已关闭。`, peerId);
+         // Don't show message if it was closed due to friend decline/completion?
+         // ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的数据通道已关闭。`, peerId);
         console.log(`[RESET CALL] Triggered by: dc.onclose for ${peerId}`);
         resetPeerConnection(peerId);
          state.updateContactStatus(peerId, false);
@@ -374,7 +398,7 @@ async function setupDataChannelEvents(peerId, dc) {
     };
 
     dc.onerror = (error) => {
-        console.error(`Data channel error for peer ${peerId}:`, error);
+        console.error(`[General Handler] Data channel error for peer ${peerId}:`, error);
 
         // Check if it's the specific "User-Initiated Abort" error after successful transfer
         const isKnownAbortError = error instanceof RTCErrorEvent &&
@@ -405,81 +429,221 @@ async function setupDataChannelEvents(peerId, dc) {
     dc.onmessage = async (event) => {
         console.log(`Raw message received from ${peerId} on channel ${dc.label}`);
         try {
-            let messageData;
-            let isFileMeta = false;
+            let parsedMessage;
+            let messageType = 'unknown';
+            let payload = {};
+            let originalSenderId = peerId; // Keep track of the original sender
 
-            if (typeof event.data === 'string') {
-                 try {
-                     const parsed = JSON.parse(event.data);
-                     if (parsed.type === 'fileMeta') {
-                         messageData = parsed;
-                         isFileMeta = true;
-                         console.log(`Received file metadata from ${peerId}:`, messageData.payload);
-                     } else if (parsed.type === 'text') {
-                         messageData = parsed;
-                         console.log(`Received text message object from ${peerId}:`, messageData);
-                     } else if (parsed.type === 'typing') {
-                          console.log(`Received typing indicator from ${peerId}:`, parsed.payload.isTyping);
-                          ui.showTypingIndicator(peerId, parsed.payload.isTyping);
-                          return;
-                     } else {
-                         messageData = { type: 'text', payload: { text: event.data }, timestamp: Date.now() };
-                         console.log(`Received plain text string from ${peerId}, wrapping:`, messageData.payload.text);
-                     }
-                 } catch(e) {
-                     messageData = { type: 'text', payload: { text: event.data }, timestamp: Date.now() };
-                     console.log(`Received non-JSON string from ${peerId}, wrapping:`, messageData.payload.text);
-                 }
-            } else if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
+            // Handle binary data first (file chunks)
+            if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
                 console.log(`Received binary data chunk from ${peerId} (${event.data.byteLength} bytes)`);
+                // File chunks are NOT encrypted in this implementation
                 fileTransfer.handleIncomingDataChunk(peerId, event.data);
-                return;
-            } else {
-                 console.warn(`Received message of unknown type from ${peerId}:`, typeof event.data);
-                 messageData = { type: 'unknown', payload: { data: event.data }, timestamp: Date.now() };
+                return; // Stop processing here for file chunks
             }
 
-            messageData.senderId = peerId;
+            // Process string data
+            if (typeof event.data === 'string') {
+                try {
+                    parsedMessage = JSON.parse(event.data);
 
-             if (isFileMeta) {
-                 const fileInfo = messageData.payload;
-                 const systemMsg = `收到来自 ${state.contacts[peerId]?.name || peerId} 的文件传输请求: ${fileInfo.name} (${formatBytes(fileInfo.size)})`;
-                 const messageForUi = {
-                     id: messageData.payload.transferId || `file-${Date.now()}`,
-                     senderId: peerId,
-                     peerId: peerId,
-                     type: 'fileMeta',
-                     payload: fileInfo,
-                     timestamp: messageData.timestamp || Date.now()
-                 };
-                 await storage.addMessage(messageForUi);
-                 ui.displayMessage(peerId, messageForUi);
-                 ui.showUnreadIndicator(peerId, true);
-                 fileTransfer.handleIncomingFileMeta(peerId, messageData.payload);
-             } else if (messageData.type === 'text') {
-                  const messageToStore = {
-                      id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-                      senderId: peerId,
-                      peerId: peerId,
-                      type: 'text',
-                      payload: { text: messageData.payload.text },
-                      timestamp: messageData.timestamp || Date.now()
-                  };
-                 await storage.addMessage(messageToStore);
-                 console.log(`Stored message from ${peerId}:`, messageToStore);
+                    // --- DECRYPTION --- 
+                    if (parsedMessage && parsedMessage.type === 'encrypted') {
+                        console.log(`Received encrypted message wrapper from ${peerId}`);
+                        const keys = state.getPeerKeys(peerId);
+                        if (keys && keys.sharedKey) {
+                            try {
+                                const decryptedJsonString = await crypto.decryptMessage(peerId, parsedMessage.payload);
+                                // Re-parse the decrypted JSON string
+                                parsedMessage = JSON.parse(decryptedJsonString);
+                                console.log(`Decrypted message. Original type: ${parsedMessage?.type}`);
+                            } catch (decryptionError) {
+                                console.error(`Failed to decrypt message from ${peerId}:`, decryptionError);
+                                ui.addSystemMessage(`无法解密来自 ${state.contacts[peerId]?.name || peerId} 的消息。`, peerId, true);
+                                // Should we return or try to process as plaintext? Return seems safer.
+                                return;
+                            }
+                        } else {
+                             console.warn(`Received encrypted message from ${peerId}, but no shared key available. Ignoring.`);
+                             ui.addSystemMessage(`收到来自 ${state.contacts[peerId]?.name || peerId} 的加密消息，但无法解密（无密钥）。`, peerId, true);
+                             return;
+                        }
+                    }
+                    // --- END DECRYPTION ---
 
-                 if (state.isActiveChat(peerId)) {
-                     ui.displayMessage(peerId, messageToStore);
-                 } else {
-                     ui.showUnreadIndicator(peerId, true);
-                 }
-             } else {
-                 console.log(`Not storing or displaying message of type: ${messageData.type}`);
-             }
+                    // Now process the potentially decrypted parsedMessage
+                    if (parsedMessage && typeof parsedMessage === 'object' && parsedMessage.type) {
+                        messageType = parsedMessage.type;
+                        payload = parsedMessage.payload || {};
+                        // Log the type AFTER potential decryption
+                        console.log(`Processing structured message of type: ${messageType} from ${peerId}`);
+                    } else {
+                        // Treat as plain text if JSON parsing doesn't yield a type, or if original wasn't JSON
+                        // This should be less common now with encryption wrapper
+                        messageType = 'text';
+                        payload = { text: (typeof parsedMessage === 'string' ? parsedMessage : event.data) }; // Use original data if parsing failed
+                        console.log(`Received plain text string or non-standard JSON from ${peerId}, wrapping.`);
+                    }
+                } catch (e) {
+                    // If JSON parsing fails initially (and it wasn't an encrypted wrapper)
+                    messageType = 'text';
+                    payload = { text: event.data };
+                    console.log(`Received non-JSON string from ${peerId}, wrapping.`);
+                }
+            } else {
+                console.warn(`Received message of unknown type from ${peerId}:`, typeof event.data);
+                return; // Ignore unknown types
+            }
+
+            // --- Process based on messageType --- //
+            switch (messageType) {
+                case 'text':
+                     // Decryption already happened if it was encrypted
+                    const messageToStore = {
+                        id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                        senderId: originalSenderId, // Use originalSenderId here
+                        peerId: originalSenderId, // Use originalSenderId here
+                        type: 'text',
+                        payload: { text: payload.text }, // Ensure payload structure is consistent
+                        timestamp: payload.timestamp || Date.now() // Timestamp might be from encrypted payload
+                    };
+                    await storage.addMessage(messageToStore);
+                    console.log(`Stored text message from ${originalSenderId}:`, messageToStore);
+                    if (state.isActiveChat(originalSenderId)) {
+                        ui.displayMessage(originalSenderId, messageToStore);
+                    } else {
+                        ui.showUnreadIndicator(originalSenderId, true);
+                    }
+                    break;
+
+                // Other cases (fileMeta, typing, publicKey, friend_request, etc.)
+                // These are generally expected to be sent *before* shared key is established
+                // or are metadata that might not need encryption (like typing).
+                // publicKey MUST NOT be encrypted.
+                // For now, assume others are plaintext.
+
+                case 'fileMeta':
+                    // Should fileMeta be encrypted? For now, assuming no.
+                    const fileInfo = payload;
+                    const messageForUi = {
+                        id: fileInfo.transferId || `file-${Date.now()}`,
+                        senderId: originalSenderId,
+                        peerId: originalSenderId,
+                        type: 'fileMeta',
+                        payload: fileInfo,
+                        timestamp: payload.timestamp || fileInfo.timestamp || Date.now()
+                    };
+                    await storage.addMessage(messageForUi);
+                    ui.displayMessage(originalSenderId, messageForUi);
+                    ui.showUnreadIndicator(originalSenderId, true);
+                    fileTransfer.handleIncomingFileMeta(originalSenderId, fileInfo);
+                    break;
+
+                case 'typing':
+                    // Typing indicators are low-value, maybe don't encrypt?
+                    console.log(`Received typing indicator from ${originalSenderId}:`, payload.isTyping);
+                    ui.showTypingIndicator(originalSenderId, payload.isTyping);
+                    break;
+
+                case 'publicKey':
+                    // Public key MUST be received in plaintext
+                    if (payload.jwk) {
+                        console.log(`Received public key from ${originalSenderId}`);
+                        await crypto.handlePublicKey(originalSenderId, payload.jwk);
+                    } else {
+                        console.warn(`Received invalid publicKey message from ${originalSenderId}: Missing jwk in payload.`);
+                    }
+                    break;
+
+                // Friend requests and responses - assumed plaintext for now
+                case 'friend_request':
+                    console.log(`[Friend Request] Received friend_request from ${originalSenderId}:`, payload);
+                    // Validate payload basics
+                    if (!payload.senderId || payload.senderId !== originalSenderId) {
+                        console.warn(`[Friend Request] Invalid senderId in request from ${originalSenderId}. Ignoring.`);
+                        return;
+                    }
+                    // Check if already a contact
+                    if (state.contacts[originalSenderId]) {
+                        console.warn(`[Friend Request] Received request from already added contact ${originalSenderId}. Ignoring.`);
+                        return;
+                    }
+                    // Check if we already sent a request to them
+                    if (state.hasPendingOutgoingRequest(originalSenderId)) {
+                        console.log(`[Friend Request] Received request from ${originalSenderId}, to whom we already sent a request. Auto-accepting?`);
+                    }
+
+                    // Store incoming request state
+                    const requestData = {
+                        id: originalSenderId,
+                        name: payload.senderName || originalSenderId,
+                        timestamp: payload.timestamp || Date.now()
+                    };
+                    state.addPendingIncomingRequest(requestData);
+
+                    // Notify UI
+                    ui.renderContactList(); // Re-render to potentially show incoming request indicator
+                    ui.addSystemMessage(`${requestData.name} 请求添加您为好友。`, null); // Global notification for now
+                    break;
+
+                case 'friend_accept':
+                    console.log(`[Friend Request] Received friend_accept from ${originalSenderId}:`, payload);
+                    // Validate payload
+                    if (!payload.acceptorId || payload.acceptorId !== originalSenderId) {
+                        console.warn(`[Friend Request] Invalid acceptorId in accept message from ${originalSenderId}. Ignoring.`);
+                        return;
+                    }
+                    // Check if we actually sent a request
+                    if (!state.hasPendingOutgoingRequest(originalSenderId)) {
+                        console.warn(`[Friend Request] Received unexpected accept from ${originalSenderId}. Ignoring.`);
+                        return;
+                    }
+                    // Process acceptance
+                    state.removePendingOutgoingRequest(originalSenderId);
+                    const acceptorName = payload.acceptorName || originalSenderId;
+                    state.addContact(originalSenderId, acceptorName); // Add as contact
+
+                    // Update UI
+                    ui.renderContactList(); // Re-render to show as full contact
+                    ui.addSystemMessage(`${acceptorName} 已接受您的好友请求。`, null);
+                    // If chat is active, update header, etc.
+                    if (state.isActiveChat(originalSenderId)) {
+                        ui.updateChatHeader(originalSenderId);
+                        ui.updateChatInputVisibility();
+                    }
+                    break;
+
+                case 'friend_decline':
+                    console.log(`[Friend Request] Received friend_decline from ${originalSenderId}:`, payload);
+                     // Validate payload
+                    if (!payload.declinerId || payload.declinerId !== originalSenderId) {
+                        console.warn(`[Friend Request] Invalid declinerId in decline message from ${originalSenderId}. Ignoring.`);
+                        return;
+                    }
+                    // Check if we actually sent a request
+                    if (!state.hasPendingOutgoingRequest(originalSenderId)) {
+                        console.warn(`[Friend Request] Received unexpected decline from ${originalSenderId}. Ignoring.`);
+                        return;
+                    }
+                    // Process decline
+                    state.removePendingOutgoingRequest(originalSenderId);
+
+                    // Update UI
+                    ui.renderContactList(); // Re-render to remove pending state
+                    ui.addSystemMessage(`${state.contacts[originalSenderId]?.name || originalSenderId} 已拒绝您的好友请求。`, null);
+
+                    // Optional: Disconnect if still connected
+                    disconnectFromPeer(originalSenderId);
+                    break;
+
+                default:
+                    console.log(`Received unhandled structured message type: ${messageType} from ${originalSenderId}`);
+                    break;
+            }
 
         } catch (e) {
-            console.error(`Error processing message from ${peerId}:`, e);
-             ui.addSystemMessage(`处理来自 ${state.contacts[peerId]?.name || peerId} 的消息时出错。`, peerId, true);
+            console.error(`Error processing message from ${originalSenderId}:`, e);
+             ui.addSystemMessage(`处理来自 ${state.contacts[originalSenderId]?.name || originalSenderId} 的消息时出错。`, originalSenderId, true);
         }
     };
 }
@@ -581,74 +745,162 @@ async function handleCandidate(peerId, candidate) {
 
 // --- Public Connection Functions ---
 
-export async function connectToPeer(targetPeerId) {
-    if (!targetPeerId) {
-        console.error("connectToPeer called without targetPeerId");
-        return;
-    }
+// --- REVISED connectToPeer function --- returns Promise<RTCDataChannel>
+export function connectToPeer(targetPeerId) {
+    return new Promise(async (resolve, reject) => {
+        // 1. Pre-checks
+        if (!targetPeerId) {
+            return reject(new Error("connectToPeer called without targetPeerId"));
+        }
+        const currentState = state.getConnectionState(targetPeerId);
+        if (currentState === 'connected') {
+            const existingDc = state.getDataChannel(targetPeerId);
+            if (existingDc && existingDc.readyState === 'open') {
+                console.log(`connectToPeer: Already connected with open DC to ${targetPeerId}. Resolving immediately.`);
+                return resolve(existingDc);
+            } else {
+                 console.log(`connectToPeer: State is connected but DC not open for ${targetPeerId}. Resetting and re-connecting.`);
+                 // Proceed to reset and connect below
+            }
+        } else if (currentState === 'connecting') {
+             console.log(`connectToPeer: Already attempting to connect to ${targetPeerId}. Rejecting new attempt.`);
+            return reject(new Error(`Already connecting to ${targetPeerId}.`));
+        }
 
-    if (state.getConnectionState(targetPeerId) === 'connected' || state.getConnectionState(targetPeerId) === 'connecting') {
-         console.log(`Already connected or connecting to ${targetPeerId}. Ignoring connect request.`);
-         return;
-    }
+        console.log(`connectToPeer: Attempting connection to peer: ${targetPeerId}`);
 
-    console.log(`Attempting to connect to peer: ${targetPeerId}`);
-    console.log(`[RESET CALL] Triggered by: connectToPeer start for ${targetPeerId}`);
-    resetPeerConnection(targetPeerId, "Connect Attempt Start");
+        // 2. Reset state for this specific attempt
+        resetPeerConnection(targetPeerId, "Connect Attempt Start");
 
-    // 2. Set initial state for the *new* connection attempt
-    ui.addSystemMessage(`正在尝试连接到 ${state.contacts[targetPeerId]?.name || targetPeerId}...`, targetPeerId);
-    state.updateContactStatus(targetPeerId, 'connecting');
-    state.updateConnectionState(targetPeerId, 'connecting');
-    console.log(`[CONNECT] Set connectionState=connecting for ${targetPeerId}`);
-    state.setIsMakingOffer(targetPeerId, true);
-    console.log(`[CONNECT] Set isMakingOffer=true for ${targetPeerId}`);
+        // 3. Setup Timeout & Cleanup Function
+        let timeoutId = null;
+        let isCleanupCalled = false; // Prevent multiple calls
 
-    // 3. Create PeerConnection and Data Channel
-    const pc = createPeerConnection(targetPeerId);
-    if (!pc) {
-        console.error(`[CONNECT ERROR] Failed to create PeerConnection for ${targetPeerId}`);
-        console.log(`[RESET CALL] Triggered by: connectToPeer PeerConnection Creation Failed for ${targetPeerId}`);
-        resetPeerConnection(targetPeerId, "PeerConnection Creation Failed");
-        return; // Exit if PC creation failed
-    }
-    console.log(`[CONNECT] Created PeerConnection for ${targetPeerId}`);
-
-    try {
-        console.log(`Creating data channel for ${targetPeerId}`);
-        const dc = pc.createDataChannel('chat', { negotiated: false });
-        state.setDataChannel(targetPeerId, dc);
-        setupDataChannelEvents(targetPeerId, dc);
-
-        // 4. Create and send offer
-        console.log(`Creating offer for ${targetPeerId}`);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        console.log(`Local description (offer) set for ${targetPeerId}`);
-
-        const offerMsg = {
-            type: 'offer',
-            payload: {
-                targetUserId: targetPeerId,
-                sdp: pc.localDescription.sdp
+        const cleanup = (reason, error = null) => {
+            if (isCleanupCalled) return;
+            isCleanupCalled = true;
+            console.log(`[connectToPeer Cleanup] Reason: ${reason} for ${targetPeerId}`);
+            clearTimeout(timeoutId); // Clear timeout
+            // Remove specific listeners added by this promise? If pc/dc are GC'd, listeners should go too.
+            // Relying on resetPeerConnection to handle closing pc/dc.
+            if (error) {
+                reject(error); // Reject the main promise
             }
         };
-        sendSignalingMessage(offerMsg);
-        console.log(`[CONNECT] Sent offer to ${targetPeerId}`);
 
-        // 5. Start connection timeout
-        console.log(`[RESET CALL] Triggered by: connectToPeer timeout setup for ${targetPeerId}`);
-        startConnectionTimeout(targetPeerId);
-        console.log(`[CONNECT] Started connection timeout for ${targetPeerId}`);
+        timeoutId = setTimeout(() => {
+            const timeoutError = new Error(`Connection to ${targetPeerId} timed out.`);
+            console.log(`[connectToPeer Timeout] ${timeoutError.message}`);
+            ui.addSystemMessage(`连接 ${state.contacts[targetPeerId]?.name || targetPeerId} 超时。`, targetPeerId, true);
+            resetPeerConnection(targetPeerId, "Connection Timeout");
+            cleanup("Timeout", timeoutError);
+        }, 30000); // 30 seconds
 
-    } catch (e) {
-        console.error(`[CONNECT ERROR] Error initiating connection to ${targetPeerId}:`, e);
-        ui.addSystemMessage(`无法发起与 ${state.contacts[targetPeerId]?.name || targetPeerId} 的连接。`, targetPeerId, true);
-        console.log(`[RESET CALL] Triggered by: connectToPeer catch block for ${targetPeerId}`);
-        resetPeerConnection(targetPeerId, "Connect Initiate Error");
-    } finally {
-        // Nothing specific needed here now
-    }
+        // 4. Set initial UI/State
+        ui.addSystemMessage(`正在尝试连接到 ${state.contacts[targetPeerId]?.name || targetPeerId}...`, targetPeerId);
+        state.updateContactStatus(targetPeerId, 'connecting');
+        state.updateConnectionState(targetPeerId, 'connecting');
+        state.setIsMakingOffer(targetPeerId, true);
+
+        // 5. Create PeerConnection
+        const pc = createPeerConnection(targetPeerId);
+        if (!pc) {
+            const creationError = new Error(`Failed to create PeerConnection for ${targetPeerId}`);
+            // resetPeerConnection was called inside createPeerConnection
+            cleanup("PC Creation Failed", creationError);
+            return; // Reject is called by cleanup
+        }
+
+        // 6. Add Promise-specific Event Listeners to PC
+        const handleIceConnectionFailure = () => {
+            if (pc.iceConnectionState === 'failed') {
+                const iceError = new Error(`ICE connection failed for ${targetPeerId}.`);
+                console.log(`[connectToPeer ICE Fail] ${iceError.message}`);
+                ui.addSystemMessage(`与 ${state.contacts[targetPeerId]?.name || targetPeerId} 的连接失败 (ICE)。`, targetPeerId, true);
+                resetPeerConnection(targetPeerId, "ICE Failed");
+                cleanup("ICE Failed", iceError);
+            }
+             // Consider closed/disconnected before DC open?
+             else if ((pc.iceConnectionState === 'closed' || pc.iceConnectionState === 'disconnected') && state.getDataChannel(targetPeerId)?.readyState !== 'open') {
+                 const iceCloseError = new Error(`ICE connection ${pc.iceConnectionState} for ${targetPeerId} before data channel open.`);
+                 console.log(`[connectToPeer ICE Close/Disconnect] ${iceCloseError.message}`);
+                 resetPeerConnection(targetPeerId, "ICE Closed/Disconnected Early");
+                 cleanup("ICE Closed/Disconnected Early", iceCloseError);
+             }
+        };
+        const handleConnectionFailure = () => {
+             if (pc.connectionState === 'failed') {
+                 const connError = new Error(`Overall connection failed for ${targetPeerId}.`);
+                 console.log(`[connectToPeer Conn Fail] ${connError.message}`);
+                 ui.addSystemMessage(`与 ${state.contacts[targetPeerId]?.name || targetPeerId} 的连接失败。`, targetPeerId, true);
+                 resetPeerConnection(targetPeerId, "Connection Failed");
+                 cleanup("Connection Failed", connError);
+             }
+             // Consider closed/disconnected before DC open?
+             else if ((pc.connectionState === 'closed' || pc.connectionState === 'disconnected') && state.getDataChannel(targetPeerId)?.readyState !== 'open') {
+                 const connCloseError = new Error(`Overall connection ${pc.connectionState} for ${targetPeerId} before data channel open.`);
+                 console.log(`[connectToPeer Conn Close/Disconnect] ${connCloseError.message}`);
+                 resetPeerConnection(targetPeerId, "Connection Closed/Disconnected Early");
+                 cleanup("Connection Closed/Disconnected Early", connCloseError);
+             }
+        };
+        pc.addEventListener('iceconnectionstatechange', handleIceConnectionFailure);
+        pc.addEventListener('connectionstatechange', handleConnectionFailure);
+
+        try {
+            // 7. Create Data Channel
+            console.log(`Creating data channel for ${targetPeerId}`);
+            const dc = pc.createDataChannel('chat', { negotiated: false });
+            state.setDataChannel(targetPeerId, dc); // Store it in state
+            setupDataChannelEvents(targetPeerId, dc); // Setup general handlers
+
+            // 8. Add Promise-specific Event Listeners to DC
+            const handleDcOpen = () => {
+                console.log(`[connectToPeer DC Open] Data channel opened for ${targetPeerId}. Resolving promise.`);
+                cleanup("DC Open");
+                resolve(dc); // Resolve the promise with the open data channel
+            };
+            const handleDcClose = () => {
+                 const closeError = new Error(`Data channel closed for ${targetPeerId} before promise resolved.`);
+                 console.log(`[connectToPeer DC Close] ${closeError.message}`);
+                 // General handler in setupDataChannelEvents will call resetPeerConnection
+                 cleanup("DC Closed Early", closeError);
+            };
+            const handleDcError = (errorEvent) => {
+                 const dcError = new Error(`Data channel error for ${targetPeerId}: ${errorEvent?.error?.message || 'Unknown error'}`);
+                 console.error(`[connectToPeer DC Error] ${dcError.message}`, errorEvent);
+                 // General handler will also run
+                 cleanup("DC Error", dcError);
+            };
+            dc.addEventListener('open', handleDcOpen);
+            dc.addEventListener('close', handleDcClose);
+            dc.addEventListener('error', handleDcError);
+
+            // 9. Create and Send Offer
+            console.log(`Creating offer for ${targetPeerId}`);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            console.log(`Local description (offer) set for ${targetPeerId}`);
+
+            const offerMsg = {
+                type: 'offer',
+                payload: {
+                    targetUserId: targetPeerId,
+                    sdp: pc.localDescription.sdp
+                }
+            };
+            sendSignalingMessage(offerMsg);
+            console.log(`[CONNECT] Sent offer to ${targetPeerId}`);
+
+        } catch (e) {
+            const creationError = new Error(`Error initiating connection sequence for ${targetPeerId}: ${e.message}`);
+            console.error(`[connectToPeer Init Error] ${creationError.message}`, e);
+            ui.addSystemMessage(`无法发起与 ${state.contacts[targetPeerId]?.name || targetPeerId} 的连接。`, targetPeerId, true);
+            resetPeerConnection(targetPeerId, "Connect Initiate Error");
+            cleanup("Connect Initiate Error", creationError);
+        }
+        // Promise resolves/rejects in the event handlers or timeout
+    });
 }
 
 export function disconnectFromPeer(peerId) {
@@ -678,8 +930,6 @@ function resetPeerConnection(peerId, reason = "Unknown") {
          return;
      }
     console.log(`[RESET] Resetting connection state for peer: ${peerId}. Reason: ${reason}`);
-
-    clearConnectionTimeout(peerId);
 
     const pc = state.getPeerConnection(peerId);
     const dc = state.getDataChannel(peerId);
@@ -711,66 +961,115 @@ function resetPeerConnection(peerId, reason = "Unknown") {
      console.log(`Finished resetting connection for ${peerId}`);
 }
 
-export function sendChatMessage(text) {
-    const activePeerId = state.getActiveChatPeerId();
+// --- MODIFIED: Send P2P message helper (Added Encryption) ---
+async function sendP2PMessage(peerId, messageObject) { // Made async
+    const dc = state.getDataChannel(peerId);
+    if (dc && dc.readyState === 'open') {
+        try {
+            // --- ENCRYPTION --- 
+            let dataToSend;
+            const keys = state.getPeerKeys(peerId);
+            if (keys && keys.sharedKey) { // Check if shared key exists for this peer
+                console.log(`Encrypting message of type ${messageObject.type} for ${peerId}`);
+                const encryptedPayload = await crypto.encryptMessage(peerId, JSON.stringify(messageObject));
+                // Wrap encrypted data with a specific type
+                dataToSend = JSON.stringify({
+                    type: 'encrypted',
+                    payload: encryptedPayload // Contains iv and ciphertext
+                });
+                console.log(`Sending encrypted message wrapper to ${peerId}`);
+            } else {
+                 // No shared key yet, send plaintext (e.g., for publicKey messages, friend requests before key exchange)
+                 console.warn(`No shared key for ${peerId}. Sending message type ${messageObject.type} in plaintext.`);
+                 dataToSend = JSON.stringify(messageObject);
+            }
+            // --- END ENCRYPTION ---
 
+            // Check buffer before sending
+            const BUFFER_THRESHOLD = 1024 * 1024; // 1MB, consistent with file transfer
+            while (dc.bufferedAmount > BUFFER_THRESHOLD) {
+                console.log(`[P2P Msg Send] DataChannel buffer full (${dc.bufferedAmount} > ${BUFFER_THRESHOLD}), waiting...`);
+                await new Promise(resolve => setTimeout(resolve, 50));
+                // Re-check channel state after waiting
+                if (dc.readyState !== 'open') {
+                    throw new Error("Data channel closed while waiting for buffer to clear.");
+                }
+            }
+
+            dc.send(dataToSend);
+            // console.log(`Sent P2P message (or wrapper) of type ${messageObject.type} to ${peerId}`); // Log might be too verbose now
+            return true;
+        } catch (e) {
+            console.error(`Error sending P2P message of type ${messageObject.type} to ${peerId}:`, e);
+            ui.addSystemMessage(`向 ${state.contacts[peerId]?.name || peerId} 发送消息失败 (类型: ${messageObject.type})。错误: ${e.message}`, peerId, true);
+            return false;
+        }
+    } else {
+        console.warn(`Cannot send P2P message: Data channel for ${peerId} not open. State: ${dc?.readyState}`);
+        ui.addSystemMessage(`无法向 ${state.contacts[peerId]?.name || peerId} 发送消息：连接未建立或已断开。`, peerId, true);
+        return false;
+    }
+}
+
+// Modified sendChatMessage to use helper (becomes async due to sendP2PMessage)
+export async function sendChatMessage(text) { // Made async
+    const activePeerId = state.getActiveChatPeerId();
     if (!activePeerId) {
         console.warn("sendChatMessage: No active chat selected.");
         ui.addSystemMessage("请先选择一个聊天对象。", null, true);
         return;
     }
 
-    const dc = state.getDataChannel(activePeerId);
+    const message = {
+        id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        type: 'text',
+        senderId: state.localUserId,
+        peerId: activePeerId,
+        payload: { text: text },
+        timestamp: Date.now()
+    };
 
-    if (dc && dc.readyState === 'open') {
-        try {
-            const message = {
-                 id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-                 type: 'text',
-                 senderId: state.localUserId,
-                 peerId: activePeerId,
-                 payload: { text: text },
-                 timestamp: Date.now()
-            };
-            const messageString = JSON.stringify(message);
-            dc.send(messageString);
-            console.log(`Sent message to ${activePeerId}:`, text);
-
-            storage.addMessage(message);
-
-            ui.displayMessage(activePeerId, message);
-            ui.clearChatInput();
-
-        } catch (e) {
-            console.error(`Error sending message to ${activePeerId}:`, e);
-            ui.addSystemMessage(`发送消息到 ${state.contacts[activePeerId]?.name || activePeerId} 失败。`, activePeerId, true);
-        }
-    } else {
-        console.warn(`Cannot send message: Data channel for ${activePeerId} not open. State: ${dc?.readyState}`);
-         ui.addSystemMessage(`无法发送消息：与 ${state.contacts[activePeerId]?.name || activePeerId} 的连接未建立或已断开。`, activePeerId, true);
+    if (await sendP2PMessage(activePeerId, message)) {
+         storage.addMessage(message);
+         ui.displayMessage(activePeerId, message);
+         ui.clearChatInput();
     }
 }
 
-export function sendTypingIndicator(isTyping) {
-     const activePeerId = state.getActiveChatPeerId();
+// Modified sendTypingIndicator to use helper (becomes async)
+export async function sendTypingIndicator(isTyping) { // Made async
+    const activePeerId = state.getActiveChatPeerId();
+    if (!activePeerId) return;
 
-    if (!activePeerId) {
-        return;
-    }
+    const indicatorMsg = {
+        type: 'typing',
+        payload: { isTyping: isTyping }
+    };
+    await sendP2PMessage(activePeerId, indicatorMsg);
+}
 
-    const dc = state.getDataChannel(activePeerId);
-
-    if (dc && dc.readyState === 'open') {
-        try {
-            const indicatorMsg = {
-                type: 'typing',
-                payload: { isTyping: isTyping }
-            };
-            dc.send(JSON.stringify(indicatorMsg));
-        } catch (e) {
-            console.error(`Error sending typing indicator to ${activePeerId}:`, e);
+// --- NEW: Functions to send friend request responses via P2P (becomes async) ---
+export async function sendFriendAccept(peerId) { // Made async
+    const acceptMessage = {
+        type: 'friend_accept',
+        payload: {
+            acceptorId: state.localUserId,
+            acceptorName: state.contacts[state.localUserId]?.name || state.localUserId,
+            timestamp: Date.now()
         }
-    }
+    };
+    return await sendP2PMessage(peerId, acceptMessage);
+}
+
+export async function sendFriendDecline(peerId) { // Made async
+    const declineMessage = {
+        type: 'friend_decline',
+        payload: {
+            declinerId: state.localUserId,
+            timestamp: Date.now()
+        }
+    };
+    return await sendP2PMessage(peerId, declineMessage);
 }
 
 export async function loadAndDisplayHistory(peerId) {
@@ -792,24 +1091,6 @@ export async function loadAndDisplayHistory(peerId) {
         console.error(`Error loading history for ${peerId}:`, e);
         ui.addSystemMessage(`加载 ${state.contacts[peerId]?.name || peerId} 的聊天记录失败。`, peerId, true);
     }
-}
-
-function startConnectionTimeout(peerId) {
-    console.log(`Starting connection timeout for ${peerId}`);
-    state.setConnectionTimeout(peerId, setTimeout(() => {
-        console.log(`Connection timeout for ${peerId}`);
-         ui.addSystemMessage(`连接 ${state.contacts[peerId]?.name || peerId} 超时。`, peerId, true);
-         console.log(`[RESET CALL] Triggered by: startConnectionTimeout timeout reached for ${peerId}`);
-        resetPeerConnection(peerId);
-        state.updateContactStatus(peerId, false);
-        ui.updateContactStatusUI(peerId, false);
-        state.setIsMakingOffer(peerId, false);
-    }, 30000));
-}
-
-function clearConnectionTimeout(peerId) {
-     console.log(`Clearing connection timeout for ${peerId}`);
-    state.clearConnectionTimeout(peerId);
 }
 
 function handleVisibilityChange() {

@@ -117,7 +117,6 @@ export async function deriveSharedKey(localPrivateKey, remotePublicKey) {
             KEY_USAGE_AES          // Key usages for the derived AES key
         );
         console.log("Shared AES key derived:", derived);
-        state.setSharedKey(derived); // Store the derived key in state
         return derived;
     } catch (error) {
         console.error("Error deriving shared key:", error);
@@ -126,23 +125,27 @@ export async function deriveSharedKey(localPrivateKey, remotePublicKey) {
     }
 }
 
-// --- Encryption/Decryption --- (Assuming these use state.sharedKey implicitly or explicitly passed)
+// --- Encryption/Decryption --- (Use peerId to get correct key from state.peerKeys)
 
-// Encrypt data using the shared AES-GCM key (Pass sharedKey explicitly)
-export async function encryptMessage(text) { // Changed signature, assumes sharedKey is in state
-    if (!state.sharedKey) throw new Error("Encryption key (sharedKey) is not available in state.");
-    if (!text) throw new Error("Cannot encrypt empty message."); // Added check
+// Encrypt data using the shared AES-GCM key for a specific peer
+export async function encryptMessage(peerId, text) {
+    // Get keys for the specific peer
+    const keys = state.getPeerKeys(peerId);
+    if (!keys || !keys.sharedKey) {
+        throw new Error(`Encryption key not available for peer ${peerId}.`);
+    }
+    if (!text) throw new Error("Cannot encrypt empty message.");
 
     try {
         const iv = window.crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV is recommended for GCM
-        const encodedData = new TextEncoder().encode(text); // Directly encode the text string
+        const encodedData = new TextEncoder().encode(text);
 
         const ciphertext = await window.crypto.subtle.encrypt(
             {
                 name: AES_PARAMS.name,
                 iv: iv
             },
-            state.sharedKey, // Use the key from state
+            keys.sharedKey, // Use the peer-specific key
             encodedData
         );
 
@@ -152,14 +155,18 @@ export async function encryptMessage(text) { // Changed signature, assumes share
             ciphertext: Array.from(new Uint8Array(ciphertext))
         };
     } catch (error) {
-        console.error("Encryption error:", error);
+        console.error(`Encryption error for peer ${peerId}:`, error);
         throw error; // Re-throw
     }
 }
 
-// Decrypt data using the shared AES-GCM key (Pass sharedKey explicitly)
-export async function decryptMessage(encryptedPayload) { // Changed signature, assumes sharedKey is in state
-    if (!state.sharedKey) throw new Error("Decryption key (sharedKey) is not available in state.");
+// Decrypt data using the shared AES-GCM key for a specific peer
+export async function decryptMessage(peerId, encryptedPayload) {
+    // Get keys for the specific peer
+    const keys = state.getPeerKeys(peerId);
+    if (!keys || !keys.sharedKey) {
+        throw new Error(`Decryption key not available for peer ${peerId}.`);
+    }
     if (!encryptedPayload || !encryptedPayload.iv || !encryptedPayload.ciphertext) {
         throw new Error("Invalid encrypted data format for decryption.");
     }
@@ -172,7 +179,7 @@ export async function decryptMessage(encryptedPayload) { // Changed signature, a
                 name: AES_PARAMS.name,
                 iv: iv
             },
-            state.sharedKey, // Use the key from state
+            keys.sharedKey, // Use the peer-specific key
             ciphertext
         );
 
@@ -180,45 +187,48 @@ export async function decryptMessage(encryptedPayload) { // Changed signature, a
         return decodedData; // Return the decrypted string directly
 
     } catch (error) {
-        console.error("Decryption error:", error);
-        throw new Error("Decryption failed. Message may be corrupted or key mismatch.");
+        console.error(`Decryption error for peer ${peerId}:`, error);
+        throw new Error(`Decryption failed for peer ${peerId}. Message may be corrupted or key mismatch.`);
     }
 }
 
 // --- Key Handling --- (New function to handle incoming public key)
 /**
- * Imports the peer's public key and derives the shared secret.
- * Stores the peer's public key and the derived shared key in the state.
+ * Imports the peer's public key and derives the shared secret for a specific peer.
+ * Stores the peer's public key and the derived shared key in the state for that peer.
+ * @param {string} peerId The ID of the peer whose public key is being handled.
  * @param {JsonWebKey} peerPublicKeyJwk The peer's public key in JWK format.
  */
-export async function handlePublicKey(peerPublicKeyJwk) {
+export async function handlePublicKey(peerId, peerPublicKeyJwk) {
     if (!state.localKeyPair || !state.localKeyPair.privateKey) {
         console.error("Cannot handle peer public key: Local key pair not available.");
         // Potentially reset connection or show error?
         return;
     }
-    console.log("Handling received public key...");
+    console.log(`Handling received public key for peer ${peerId}...`);
     try {
         const remotePublicKey = await importPublicKey(peerPublicKeyJwk);
         if (!remotePublicKey) {
-            throw new Error("Failed to import peer public key.");
+            throw new Error(`Failed to import peer public key for ${peerId}.`);
         }
-        state.setPeerPublicKey(remotePublicKey); // Store imported peer public key
 
         // Derive the shared key
         const sharedKey = await deriveSharedKey(state.localKeyPair.privateKey, remotePublicKey);
         if (!sharedKey) {
-             throw new Error("Failed to derive shared key.");
+             throw new Error(`Failed to derive shared key for ${peerId}.`);
         }
-        // Shared key is already stored in state by deriveSharedKey
-        console.log("Shared key derived and stored successfully.");
+
+        // Store both keys in the state map for this peer
+        state.setPeerKeys(peerId, { sharedKey: sharedKey, peerPublicKey: remotePublicKey });
+
+        console.log(`Shared key derived and stored successfully for peer ${peerId}.`);
         // Potentially trigger UI update or other logic now that secure channel is ready
-         addSystemMessage("端到端加密已建立。", false);
+        addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的端到端加密已建立。`, peerId);
 
     } catch (error) {
-        console.error("Error handling peer public key:", error);
-        addSystemMessage("处理对方公钥并建立安全连接时出错。", true);
+        console.error(`Error handling peer public key for ${peerId}:`, error);
+        addSystemMessage(`处理 ${state.contacts[peerId]?.name || peerId} 的公钥并建立安全连接时出错。`, peerId, true);
         // Consider resetting the connection here if key exchange fails
-        // resetConnection(); // Needs access to resetConnection
+        // connection.resetPeerConnection(peerId); // Example call if connection module was imported
     }
 } 

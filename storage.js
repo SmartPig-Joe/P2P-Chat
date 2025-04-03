@@ -42,8 +42,8 @@ export function initDB() {
             // Create object store for messages
             if (!tempDb.objectStoreNames.contains(STORE_MESSAGES)) {
                 console.log(`Creating object store: ${STORE_MESSAGES}`);
-                // Use autoIncrementing key
-                const messageStore = tempDb.createObjectStore(STORE_MESSAGES, { keyPath: 'id', autoIncrement: true });
+                // Use a specific string ID provided in the message object as the key
+                const messageStore = tempDb.createObjectStore(STORE_MESSAGES, { keyPath: 'id' });
 
                 // Create indexes for efficient querying
                 // Index by timestamp to sort messages chronologically

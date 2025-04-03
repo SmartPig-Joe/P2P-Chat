@@ -3,6 +3,8 @@
 // Define the key for localStorage
 const LOCAL_USER_ID_KEY = 'p2pChatLocalUserId';
 const CONTACTS_STORAGE_KEY = 'p2pChatContacts'; // Key for contacts in localStorage
+const PENDING_INCOMING_REQUESTS_KEY = 'p2pChatPendingIncoming'; // Key for pending incoming requests (optional persistence)
+const PENDING_OUTGOING_REQUESTS_KEY = 'p2pChatPendingOutgoing'; // Key for pending outgoing requests (optional persistence)
 
 // Function to get or generate the local user ID
 function initializeLocalUserId() {
@@ -44,6 +46,11 @@ export let isTyping = false; // Track if *local* user is typing
 // --- File Transfer State (Consider if needs per-peer isolation later) ---
 export let incomingFiles = {}; // Store incoming file chunks { transferId: { info: {}, chunks: [], receivedSize: 0, peerId: string } }
 
+// --- NEW: Friend Request State ---
+// IDs of users we have sent a friend request to and are awaiting response
+export let pendingOutgoingRequests = new Set();
+// Map of users who have sent us a friend request { peerId: { id: string, name?: string, timestamp: number } }
+export let pendingIncomingRequests = new Map();
 
 // --- Functions to update global state ---
 export function setWs(newWs) { ws = newWs; }
@@ -60,6 +67,54 @@ export function isActiveChat(peerId) { return activeChatPeerId === peerId; }
 export function setTypingTimeout(timeoutId) { typingTimeout = timeoutId; }
 export function setIsTyping(status) { isTyping = status; }
 export function setIncomingFiles(files) { incomingFiles = files; } // Keep for now, may need rework
+
+// --- NEW: Functions to manage Friend Request State ---
+
+// Store outgoing request ID
+export function addPendingOutgoingRequest(peerId) {
+    pendingOutgoingRequests.add(peerId);
+    savePendingRequests(); // Optional: Persist
+    console.log(`Added pending outgoing request for: ${peerId}`);
+}
+
+export function removePendingOutgoingRequest(peerId) {
+    const deleted = pendingOutgoingRequests.delete(peerId);
+    if (deleted) {
+        savePendingRequests(); // Optional: Persist
+        console.log(`Removed pending outgoing request for: ${peerId}`);
+    }
+    return deleted;
+}
+
+export function hasPendingOutgoingRequest(peerId) {
+    return pendingOutgoingRequests.has(peerId);
+}
+
+// Store incoming request details
+export function addPendingIncomingRequest(request) { // request: { id: string, name?: string, timestamp: number }
+    if (!request || !request.id) return false;
+    pendingIncomingRequests.set(request.id, request);
+    savePendingRequests(); // Optional: Persist
+    console.log(`Added pending incoming request from: ${request.id}`);
+    return true;
+}
+
+export function removePendingIncomingRequest(peerId) {
+    const deleted = pendingIncomingRequests.delete(peerId);
+    if (deleted) {
+        savePendingRequests(); // Optional: Persist
+        console.log(`Removed pending incoming request from: ${peerId}`);
+    }
+    return deleted;
+}
+
+export function getPendingIncomingRequest(peerId) {
+    return pendingIncomingRequests.get(peerId);
+}
+
+export function hasPendingIncomingRequest(peerId) {
+    return pendingIncomingRequests.has(peerId);
+}
 
 // --- Functions to manage Per-Peer State ---
 
@@ -190,6 +245,39 @@ export function updateDataChannelState(peerId, dcState) {
 
 // --- Contact Management Functions (Modified) ---
 
+// NEW: Optional function to load pending requests from localStorage
+export function loadPendingRequests() {
+    try {
+        const storedOutgoing = localStorage.getItem(PENDING_OUTGOING_REQUESTS_KEY);
+        if (storedOutgoing) {
+            pendingOutgoingRequests = new Set(JSON.parse(storedOutgoing));
+            console.log("Loaded pending outgoing requests:", pendingOutgoingRequests);
+        }
+        const storedIncoming = localStorage.getItem(PENDING_INCOMING_REQUESTS_KEY);
+        if (storedIncoming) {
+            pendingIncomingRequests = new Map(JSON.parse(storedIncoming));
+            console.log("Loaded pending incoming requests:", pendingIncomingRequests);
+        }
+    } catch (e) {
+        console.error("Failed to load pending requests from localStorage:", e);
+        pendingOutgoingRequests = new Set();
+        pendingIncomingRequests = new Map();
+    }
+}
+
+// NEW: Optional function to save pending requests to localStorage
+function savePendingRequests() {
+     // Note: Saving pending requests might lead to stale state if the app closes unexpectedly.
+     // Consider if persistence is truly needed or if requests should be transient.
+     // For now, let's implement saving but be aware of potential issues.
+    try {
+        localStorage.setItem(PENDING_OUTGOING_REQUESTS_KEY, JSON.stringify(Array.from(pendingOutgoingRequests)));
+        localStorage.setItem(PENDING_INCOMING_REQUESTS_KEY, JSON.stringify(Array.from(pendingIncomingRequests.entries())));
+    } catch (e) {
+        console.error("Failed to save pending requests to localStorage:", e);
+    }
+}
+
 export function loadContacts() {
     try {
         const storedContacts = localStorage.getItem(CONTACTS_STORAGE_KEY);
@@ -231,39 +319,48 @@ export function saveContacts() {
     }
 }
 
-export function addContact(peerId, name = null) { // Allow setting name on add
+// Modified addContact: Now potentially called when accepting a request
+// Need to ensure we don't re-add if already exists
+export function addContact(peerId, name = null) {
     if (!peerId || typeof peerId !== 'string' || peerId.trim() === '') {
         console.warn("Attempted to add invalid peer ID:", peerId);
         return false;
     }
-     const trimmedId = peerId.trim();
+    const trimmedId = peerId.trim();
     if (trimmedId === localUserId) {
         console.warn("Cannot add yourself as a contact.");
         return false;
     }
-    if (contacts[trimmedId]) {
+
+    const existingContact = contacts[trimmedId];
+    const nameToUse = name || trimmedId; // Use provided name or default to ID
+
+    if (existingContact) {
         console.log(`Contact ${trimmedId} already exists.`);
-        // Optionally update name if provided?
-        if (name && contacts[trimmedId].name !== name) {
-             contacts[trimmedId].name = name;
+        // Update name if a new one is provided and different
+        if (existingContact.name !== nameToUse) {
+             existingContact.name = nameToUse;
              saveContacts();
+             console.log(`Updated name for contact ${trimmedId} to ${nameToUse}`);
              // TODO: Need UI update for name change
-             // ui.updateContactName(trimmedId, name);
+             // ui.updateContactName(trimmedId, name); // Needs implementation in ui.js
         }
-        return true;
+        return true; // Indicate contact exists or was updated
     }
+
+    // Contact doesn't exist, add new
     const newContact = {
         id: trimmedId,
-        name: name || trimmedId, // Use provided name or default to ID
-        online: false    // Initially offline
+        name: nameToUse,
+        online: false // Initialize as offline, status updated by connection logic
     };
     const updatedContacts = { ...contacts, [trimmedId]: newContact };
     setContacts(updatedContacts);
     saveContacts();
     console.log(`Added new contact: ${trimmedId}`);
     // TODO: Need UI update to add contact to list
-    // ui.addContactToList(newContact);
-    return true;
+    // ui.addContactToList(newContact); // Needs implementation in ui.js
+    return true; // Indicate new contact was added
 }
 
 export function updateContactStatus(peerId, status) { // status: boolean | 'connecting'
@@ -329,9 +426,10 @@ export function removeContact(peerId) {
 // --- Reset Functions ---
 
 // Reset state for a *specific* peer
+// --- MODIFIED: Also clear pending requests related to this peer ---
 export function resetPeerState(peerId) {
     if (!peerId) return;
-    console.log(`Resetting all state for peer: ${peerId}`);
+    console.log(`[RESET] Resetting all state for peer: ${peerId}`); // Added tag
 
     // Get PC and DC before removing from maps
     const pc = getPeerConnection(peerId);
@@ -354,6 +452,11 @@ export function resetPeerState(peerId) {
     removeMakingOfferFlag(peerId);
     clearConnectionTimeout(peerId); // Ensure timeout is cleared
 
+    // --- NEW: Clear pending requests related to this peer ---
+    removePendingOutgoingRequest(peerId);
+    removePendingIncomingRequest(peerId);
+    // --- END NEW ---
+
     // Update contact status to offline
     updateContactStatus(peerId, false);
 
@@ -374,6 +477,11 @@ export function resetAllConnections() {
      });
      // Also clear any other potentially relevant global state if needed
      setIncomingFiles({}); // Clear file transfer state
+     // --- NEW: Clear all pending requests on full reset ---
+     pendingOutgoingRequests.clear();
+     pendingIncomingRequests.clear();
+     savePendingRequests(); // Persist the cleared state
+     // --- END NEW ---
      console.log("Finished resetting all connections.");
 }
 

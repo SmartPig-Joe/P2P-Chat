@@ -110,38 +110,95 @@ function stopLocalTypingIndicator() {
     }
 }
 
-// Handle adding a new contact
-function handleAddContact() {
-    console.log('[Debug] handleAddContact function entered.');
-    if (!dom.addContactInput) { // Removed check for button as Enter works too
+// --- MODIFIED: Handle Friend Request Logic ---
+async function handleAddContact() {
+    if (!dom.addContactInput) {
         console.warn('[Debug] handleAddContact returning early: addContactInput not found.');
         return;
     }
     const peerIdToAdd = dom.addContactInput.value.trim();
-    const contactName = dom.addContactNameInput?.value.trim() || null; // Optional name input
-    console.log(`[Debug] Attempting to add contact ID: "${peerIdToAdd}", Name: "${contactName}"`);
+    console.log(`[Friend Request] Attempting to add/request contact ID: "${peerIdToAdd}"`);
 
     if (!peerIdToAdd) {
-        ui.addSystemMessage("请输入要添加的 Peer ID。", null, true); // Global system message
+        ui.addSystemMessage("请输入要添加的 Peer ID。", null, true);
         return;
     }
 
     if (peerIdToAdd === state.localUserId) {
-         ui.addSystemMessage("不能添加自己为联系人。", null, true); // Global system message
-         return;
+        ui.addSystemMessage("不能添加自己为联系人。", null, true);
+        return;
     }
 
-    const success = state.addContact(peerIdToAdd, contactName); // Pass name to state function
-    if (success) {
-        // Display confirmation message - maybe global or specific to a settings area if exists
-        // ui.addSystemMessage(`联系人 ${state.contacts[peerIdToAdd]?.name || peerIdToAdd} 已添加/更新。`);
-        console.log(`Contact ${peerIdToAdd} added/updated successfully.`);
-        ui.renderContactList(); // Re-render the list to show the new/updated contact
-        dom.addContactInput.value = ''; // Clear ID input
-        if (dom.addContactNameInput) dom.addContactNameInput.value = ''; // Clear name input
-    } else {
-        // Error messages should ideally be more specific from state.addContact if possible
-         ui.addSystemMessage(`无法添加联系人 ${peerIdToAdd}。ID可能无效或已存在。`, null, true); // Generic fallback
+    // 1. Check if already a contact
+    if (state.contacts[peerIdToAdd]) {
+        ui.addSystemMessage(`用户 ${state.contacts[peerIdToAdd].name || peerIdToAdd} 已经是您的联系人。`, null);
+        return;
+    }
+
+    // 2. Check if already sent a request
+    if (state.hasPendingOutgoingRequest(peerIdToAdd)) {
+        ui.addSystemMessage(`您已向 ${peerIdToAdd} 发送过好友请求，请等待对方确认。`, null);
+        return;
+    }
+
+    // 3. Check if there is an incoming request from this user
+    if (state.hasPendingIncomingRequest(peerIdToAdd)) {
+        ui.addSystemMessage(`用户 ${peerIdToAdd} 已向您发送好友请求，请在通知中处理。`, null);
+        // TODO: Ideally, highlight the incoming request in the UI here
+        return;
+    }
+
+    // 4. Attempt to connect to the peer
+    ui.addSystemMessage(`正在尝试连接到 ${peerIdToAdd} 以发送好友请求...`, null);
+    try {
+        // connectToPeer now returns a Promise that resolves with the OPEN data channel
+        // or rejects if connection fails/times out.
+        const dc = await connection.connectToPeer(peerIdToAdd);
+
+        console.log(`[Friend Request] Connection successful (DataChannel open) to ${peerIdToAdd}. Sending request.`);
+
+        // Prepare request message
+        const requestMessage = {
+            type: 'friend_request',
+            payload: {
+                senderId: state.localUserId,
+                senderName: state.contacts[state.localUserId]?.name || state.localUserId,
+                timestamp: Date.now()
+            }
+        };
+
+        // Send request via the now open DataChannel
+        dc.send(JSON.stringify(requestMessage));
+
+        // Update local state and UI *after* successful send
+        state.addPendingOutgoingRequest(peerIdToAdd);
+        ui.renderContactList(); // Re-render list to show pending state
+        ui.addSystemMessage(`已向 ${peerIdToAdd} 发送好友请求。`, null);
+        dom.addContactInput.value = ''; // Clear input
+        if (dom.addContactNameInput) dom.addContactNameInput.value = '';
+
+    } catch (connectError) {
+        // Handle errors from connectToPeer (timeout, ICE failure, DC close/error, etc.)
+        console.error(`[Friend Request] Failed to connect or send request to ${peerIdToAdd}:`, connectError);
+        // Display a user-friendly error message based on the error
+        let errorMessage = `无法向 ${peerIdToAdd} 发送好友请求。`;
+        if (connectError instanceof Error) {
+            if (connectError.message.includes('timed out')) {
+                errorMessage += " 连接超时。对方可能不在线或网络不稳定。";
+            } else if (connectError.message.includes('ICE')) {
+                errorMessage += " 建立直接连接失败 (ICE)。";
+            } else if (connectError.message.includes('closed') || connectError.message.includes('error')) {
+                 errorMessage += " 数据通道关闭或发生错误。";
+            } else {
+                 errorMessage += ` 原因：${connectError.message}`; // General error
+            }
+        } else {
+            errorMessage += " 未知错误。";
+        }
+        ui.addSystemMessage(errorMessage, null, true);
+
+        // Ensure state is clean after failure (resetPeerConnection is called internally by connectToPeer on failure)
+        // state.resetPeerState(peerIdToAdd); // Not needed here, handled by reject path in connectToPeer
     }
 }
 
@@ -201,6 +258,7 @@ async function initializeApp() {
 
     // 2. Load State & Initial UI Setup
     state.loadContacts(); // Load contacts from localStorage
+    state.loadPendingRequests(); // <-- ADD THIS LINE TO LOAD PENDING REQUESTS
     ui.initializeUI(); // Call the consolidated UI initializer (this calls renderContactList, etc.)
 
     // 3. Setup Event Listeners

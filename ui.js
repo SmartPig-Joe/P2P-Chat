@@ -567,52 +567,97 @@ export function updateFileMessageProgress(peerId, transferId, progress, download
 
 // --- Contact List / Member List --- // Simplified - now only one list
 
-// Re-renders the entire contact list based on state.contacts
+// Re-renders the entire contact list based on state.contacts and pending requests
 export function renderContactList() {
     if (!dom.contactsListContainer) return;
 
     dom.contactsListContainer.innerHTML = ''; // Clear existing list
 
-    const contactsArray = Object.values(state.contacts);
-    // Sort contacts? Maybe alphabetically? Optional.
-    contactsArray.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+    // Separate sections or combined list with different styling
+    const pendingIncomingContainer = document.createElement('div');
+    pendingIncomingContainer.id = 'pending-incoming-requests';
+    const pendingOutgoingContainer = document.createElement('div');
+    pendingOutgoingContainer.id = 'pending-outgoing-requests';
+    const confirmedContactsContainer = document.createElement('div');
+    confirmedContactsContainer.id = 'confirmed-contacts';
 
-    if (contactsArray.length === 0) {
-        dom.contactsListContainer.innerHTML = '<p class="text-discord-text-muted text-sm px-3 py-2">还没有联系人。</p>';
-        return;
+    let hasIncoming = false;
+    let hasOutgoing = false;
+    let hasConfirmed = false;
+
+    // 1. Render Pending Incoming Requests
+    if (state.pendingIncomingRequests.size > 0) {
+        hasIncoming = true;
+        pendingIncomingContainer.innerHTML += `<h3 class="px-3 pt-3 pb-1 text-xs font-semibold uppercase text-discord-text-muted">待处理的请求 - ${state.pendingIncomingRequests.size}</h3>`;
+        state.pendingIncomingRequests.forEach(request => {
+            const element = createPendingIncomingElement(request);
+            pendingIncomingContainer.appendChild(element);
+        });
     }
 
-    contactsArray.forEach(contact => {
-        const contactElement = createContactItemElement(contact);
-        dom.contactsListContainer.appendChild(contactElement);
-    });
+    // 2. Render Pending Outgoing Requests
+    if (state.pendingOutgoingRequests.size > 0) {
+         hasOutgoing = true;
+        pendingOutgoingContainer.innerHTML += `<h3 class="px-3 pt-3 pb-1 text-xs font-semibold uppercase text-discord-text-muted">已发送的请求 - ${state.pendingOutgoingRequests.size}</h3>`;
+        state.pendingOutgoingRequests.forEach(peerId => {
+            const element = createPendingOutgoingElement(peerId);
+            pendingOutgoingContainer.appendChild(element);
+        });
+    }
+
+    // 3. Render Confirmed Contacts
+    const contactsArray = Object.values(state.contacts);
+    contactsArray.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+    if (contactsArray.length > 0) {
+        hasConfirmed = true;
+        confirmedContactsContainer.innerHTML += `<h3 class="px-3 pt-3 pb-1 text-xs font-semibold uppercase text-discord-text-muted">好友</h3>`;
+        contactsArray.forEach(contact => {
+             // Only render if not also in pending outgoing (shouldn't happen with current logic, but safe check)
+             // if (!state.hasPendingOutgoingRequest(contact.id)) {
+                 const contactElement = createContactItemElement(contact); // Existing function for confirmed contacts
+                 confirmedContactsContainer.appendChild(contactElement);
+             // }
+        });
+    }
+
+    // Append sections to the main container
+    if (hasIncoming) dom.contactsListContainer.appendChild(pendingIncomingContainer);
+    if (hasOutgoing) dom.contactsListContainer.appendChild(pendingOutgoingContainer);
+    if (hasConfirmed) dom.contactsListContainer.appendChild(confirmedContactsContainer);
+
+    // Handle empty state if nothing is rendered
+    if (!hasIncoming && !hasOutgoing && !hasConfirmed) {
+        dom.contactsListContainer.innerHTML = '<p class="text-discord-text-muted text-sm px-3 py-2">还没有联系人或请求。</p>';
+    }
 }
 
-// Creates a single contact list item element
+// Creates a single confirmed contact list item element (Existing function, slightly adjusted classes)
 function createContactItemElement(contact) {
     const element = document.createElement('div');
-    element.className = 'flex items-center space-x-3 px-2 py-1.5 mx-2 rounded cursor-pointer hover:bg-discord-gray-3 group contact-item';
+    // Add data attribute to mark type
+    element.className = 'flex items-center space-x-3 px-2 py-1.5 mx-2 rounded cursor-pointer hover:bg-discord-gray-3 group contact-item confirmed-contact';
     element.dataset.peerId = contact.id;
+    element.dataset.contactType = 'confirmed'; // Mark as confirmed
 
     const avatarColor = getAvatarColor(contact.id);
     const avatarText = escapeHTML((contact.name || contact.id).charAt(0).toUpperCase());
     const nameEscaped = escapeHTML(contact.name || contact.id);
 
-    // Status Indicator Logic
-    let statusIndicatorHTML;
-    let statusTitle;
+    // Status Indicator Logic (remains the same)
+    let statusIndicatorHTML = '';
+    let statusTitle = '状态未知'; // Default title
     if (contact.online === true) {
         statusIndicatorHTML = '<span class="absolute bottom-0 right-0 block h-3 w-3 rounded-full bg-discord-green ring-2 ring-discord-gray-1"></span>';
         statusTitle = '在线';
     } else if (contact.online === 'connecting') {
-         statusIndicatorHTML = '<span class="absolute bottom-0 right-0 block h-3 w-3 rounded-full bg-discord-yellow ring-2 ring-discord-gray-1"></span>'; // Yellow for connecting
-         statusTitle = '连接中...';
+        statusIndicatorHTML = '<span class="absolute bottom-0 right-0 block h-3 w-3 rounded-full bg-discord-yellow ring-2 ring-discord-gray-1"></span>';
+        statusTitle = '连接中...';
     } else {
-        statusIndicatorHTML = '<span class="absolute bottom-0 right-0 block h-3 w-3 rounded-full bg-discord-text-muted ring-2 ring-discord-gray-1 opacity-50 group-hover:opacity-100"></span>'; // Gray for offline
+        statusIndicatorHTML = '<span class="absolute bottom-0 right-0 block h-3 w-3 rounded-full bg-discord-text-muted ring-2 ring-discord-gray-1 opacity-50 group-hover:opacity-100"></span>';
         statusTitle = '离线';
     }
 
-    // Unread Indicator Placeholder (initially hidden)
+    // Unread Indicator Placeholder (remains the same)
     const unreadIndicatorHTML = '<span class="bg-discord-red w-2 h-2 rounded-full ml-auto hidden unread-indicator"></span>';
 
     element.innerHTML = `
@@ -622,25 +667,232 @@ function createContactItemElement(contact) {
         </div>
         <span class="flex-1 text-discord-text-primary truncate font-medium text-sm contact-name">${nameEscaped}</span>
         ${unreadIndicatorHTML}
-        <!-- Remove delete button here if it existed -->
+        <!-- Action buttons could be added via context menu -->
     `;
 
-    // Add click listener to the main element for selecting chat
+    // Add click listener to select chat (only for confirmed contacts)
     element.addEventListener('click', handleContactClick);
 
-    // --- NEW: Add contextmenu listener ---
+    // Add contextmenu listener (remains the same)
     element.addEventListener('contextmenu', (event) => {
         showContextMenu(event, contact.id);
     });
-    // --- End NEW ---
 
     return element;
+}
+
+// --- NEW: Create element for Pending Incoming Request ---
+function createPendingIncomingElement(request) {
+    const element = document.createElement('div');
+    element.className = 'flex items-center justify-between px-2 py-1.5 mx-2 rounded group contact-item incoming-request'; // No hover background change by default
+    element.dataset.peerId = request.id;
+    element.dataset.contactType = 'incoming'; // Mark type
+
+    const avatarColor = getAvatarColor(request.id);
+    const avatarText = escapeHTML((request.name || request.id).charAt(0).toUpperCase());
+    const nameEscaped = escapeHTML(request.name || request.id);
+
+    element.innerHTML = `
+        <div class="flex items-center space-x-3 min-w-0">
+            <div class="relative flex-shrink-0">
+                <img src="https://placehold.co/32x32/${avatarColor}/ffffff?text=${avatarText}" alt="${nameEscaped} 头像" class="rounded-full" title="${nameEscaped} (${request.id})">
+                <!-- No status indicator for incoming requests -->
+            </div>
+            <span class="flex-1 text-discord-text-primary truncate font-medium text-sm contact-name" title="${nameEscaped} (${request.id})">${nameEscaped}</span>
+        </div>
+        <div class="flex items-center space-x-1 flex-shrink-0">
+            <button class="accept-request-btn p-1 rounded text-discord-green hover:bg-discord-gray-3" title="接受">
+                <span class="material-symbols-outlined text-lg">check</span>
+            </button>
+            <button class="decline-request-btn p-1 rounded text-discord-red hover:bg-discord-gray-3" title="拒绝">
+                <span class="material-symbols-outlined text-lg">close</span>
+            </button>
+        </div>
+    `;
+
+    // Add event listeners for accept/decline buttons
+    element.querySelector('.accept-request-btn').addEventListener('click', (e) => {
+        e.stopPropagation(); // Prevent potential parent click handlers
+        handleAcceptRequest(request.id);
+    });
+    element.querySelector('.decline-request-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleDeclineRequest(request.id);
+    });
+
+    // No click listener for selecting chat on incoming requests
+    // No context menu for incoming requests (or define a specific one)
+
+    return element;
+}
+
+// --- NEW: Create element for Pending Outgoing Request ---
+function createPendingOutgoingElement(peerId) {
+    const element = document.createElement('div');
+    element.className = 'flex items-center justify-between px-2 py-1.5 mx-2 rounded group contact-item outgoing-request opacity-70'; // Dimmed, no hover, no cursor pointer
+    element.dataset.peerId = peerId;
+    element.dataset.contactType = 'outgoing'; // Mark type
+
+    const avatarColor = getAvatarColor(peerId);
+    const avatarText = escapeHTML(peerId.charAt(0).toUpperCase()); // Use ID for text initially
+    const nameEscaped = escapeHTML(peerId); // Show ID
+
+    element.innerHTML = `
+        <div class="flex items-center space-x-3 min-w-0">
+            <div class="relative flex-shrink-0">
+                <img src="https://placehold.co/32x32/${avatarColor}/ffffff?text=${avatarText}" alt="${nameEscaped} 头像" class="rounded-full" title="已发送请求给 ${nameEscaped}">
+                 <!-- Maybe a specific icon? -->
+                 <span class="absolute bottom-0 right-0 block h-3 w-3 rounded-full bg-discord-text-muted ring-2 ring-discord-gray-1 flex items-center justify-center" title="等待确认">
+                    <span class="material-symbols-outlined text-[9px] text-discord-gray-1">hourglass_empty</span>
+                 </span>
+            </div>
+            <span class="flex-1 text-discord-text-muted truncate italic font-medium text-sm contact-name" title="等待 ${nameEscaped} 确认">${nameEscaped}</span>
+        </div>
+        <div class="flex-shrink-0">
+             <button class="cancel-request-btn p-1 rounded text-discord-red hover:bg-discord-gray-3 opacity-0 group-hover:opacity-100" title="取消请求">
+                 <span class="material-symbols-outlined text-lg">cancel</span>
+             </button>
+        </div>
+    `;
+
+     // Add event listener for cancel button
+    element.querySelector('.cancel-request-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleCancelRequest(peerId);
+    });
+
+    // No click listener for selecting chat
+    // No context menu (or a specific one to cancel)
+
+    return element;
+}
+
+
+// --- NEW: Handlers for Request Actions ---
+
+async function handleAcceptRequest(peerId) {
+    console.log(`[Friend Request] Accepting request from ${peerId}`);
+    const request = state.getPendingIncomingRequest(peerId);
+    if (!request) return;
+
+    // 1. Send accept message via P2P
+    const sent = connection.sendFriendAccept(peerId);
+    if (!sent) {
+        addSystemMessage(`向 ${request.name || peerId} 发送接受消息失败。`, null, true);
+        return; // Don't proceed if sending failed
+    }
+
+    // 2. Add contact locally
+    const addedOrUpdated = state.addContact(peerId, request.name);
+
+    // 3. Remove pending incoming request state
+    state.removePendingIncomingRequest(peerId);
+
+    // 4. Update UI - More granularly
+    // Find and remove the pending incoming request element
+    const requestElement = dom.contactsListContainer?.querySelector(`.contact-item.incoming-request[data-peer-id="${peerId}"]`);
+    if (requestElement) {
+        requestElement.remove();
+        console.log(`Removed incoming request UI for ${peerId}`);
+    } else {
+         console.warn(`Could not find incoming request UI element for ${peerId} to remove.`);
+         // Fallback to re-render if element removal fails?
+         renderContactList(); // Re-render as fallback
+    }
+
+    // Add the new contact element to the list if it was successfully added/updated in state
+    if (addedOrUpdated) {
+        const contactData = state.contacts[peerId]; // Get the final contact data
+        if (contactData) {
+            addContactToList(contactData); // Add the confirmed contact to the UI list
+        }
+    } else {
+         console.warn(`state.addContact returned false for ${peerId}, UI might be inconsistent.`);
+         // Optionally re-render list as a safety measure if state update failed
+         renderContactList();
+    }
+
+    // No longer calling renderContactList() as the primary update mechanism here.
+    addSystemMessage(`您已接受 ${request.name || peerId} 的好友请求。`, null);
+
+    // 5. Optional: Initiate connection if not already connected, or switch to chat
+    if (state.getConnectionState(peerId) !== 'connected') {
+        connection.connectToPeer(peerId);
+    }
+    // Consider automatically switching to the new contact's chat?
+    // handleContactClick simulation might be complex, maybe just connect.
+}
+
+async function handleDeclineRequest(peerId) {
+    console.log(`[Friend Request] Declining request from ${peerId}`);
+    const request = state.getPendingIncomingRequest(peerId);
+    if (!request) return;
+
+    // 1. Send decline message via P2P
+    const sent = connection.sendFriendDecline(peerId);
+    if (!sent) {
+         addSystemMessage(`向 ${request.name || peerId} 发送拒绝消息失败（可能已离线）。`, null, true);
+    }
+
+    // 2. Remove pending incoming request state
+    state.removePendingIncomingRequest(peerId);
+
+    // 3. Update UI - More granularly
+    // Find and remove the pending incoming request element
+    const requestElement = dom.contactsListContainer?.querySelector(`.contact-item.incoming-request[data-peer-id="${peerId}"]`);
+    if (requestElement) {
+        requestElement.remove();
+        console.log(`Removed incoming request UI for ${peerId}`);
+    } else {
+        console.warn(`Could not find incoming request UI element for ${peerId} to remove.`);
+        // Fallback to re-render if element removal fails?
+        renderContactList(); // Re-render as fallback
+    }
+    // No longer calling renderContactList() here.
+    addSystemMessage(`您已拒绝 ${request.name || peerId} 的好友请求。`, null);
+
+    // 4. Optional: Disconnect if connected
+    if (state.getConnectionState(peerId) === 'connected') {
+        connection.disconnectFromPeer(peerId);
+    }
+}
+
+async function handleCancelRequest(peerId) {
+    console.log(`[Friend Request] Cancelling outgoing request to ${peerId}`);
+    if (!state.hasPendingOutgoingRequest(peerId)) return;
+
+    // 1. Remove pending outgoing request state
+    state.removePendingOutgoingRequest(peerId);
+
+    // 2. Update UI - More granularly
+    // Find and remove the pending outgoing request element
+    const requestElement = dom.contactsListContainer?.querySelector(`.contact-item.outgoing-request[data-peer-id="${peerId}"]`);
+    if (requestElement) {
+        requestElement.remove();
+        console.log(`Removed outgoing request UI for ${peerId}`);
+    } else {
+        console.warn(`Could not find outgoing request UI element for ${peerId} to remove.`);
+        // Fallback to re-render if element removal fails?
+        renderContactList(); // Re-render as fallback
+    }
+    // No longer calling renderContactList() here.
+    addSystemMessage(`您已取消发送给 ${peerId} 的好友请求。`, null);
+
+    // 3. Optional: Send cancellation message via P2P? (Requires peer to handle it)
+    // This adds complexity. For now, just local cancellation.
+    // const sent = sendP2PMessage(peerId, { type: 'friend_cancel', payload: { cancellerId: state.localUserId } });
+
+    // 4. Optional: Disconnect if connected (connection might exist from initial request attempt)
+    if (state.getConnectionState(peerId) === 'connected') {
+        connection.disconnectFromPeer(peerId);
+    }
 }
 
 // Updates the online status indicator and title for a specific contact in the list
 export function updateContactStatusUI(peerId, status) { // status: boolean | 'connecting'
     if (!dom.contactsListContainer) return;
-    const contactElement = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
+     // Find only confirmed contacts for status updates
+    const contactElement = dom.contactsListContainer.querySelector(`.contact-item.confirmed-contact[data-peer-id="${peerId}"]`);
     if (contactElement) {
         const img = contactElement.querySelector('img');
         const statusIndicatorContainer = contactElement.querySelector('.relative'); // Container for avatar + status
@@ -679,7 +931,8 @@ export function updateContactStatusUI(peerId, status) { // status: boolean | 'co
 // Shows or hides the unread message indicator for a contact
 export function showUnreadIndicator(peerId, show) {
     if (!dom.contactsListContainer) return;
-    const contactElement = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
+    // Find only confirmed contacts to show unread indicator
+    const contactElement = dom.contactsListContainer.querySelector(`.contact-item.confirmed-contact[data-peer-id="${peerId}"]`);
     if (contactElement) {
         const indicator = contactElement.querySelector('.unread-indicator');
         if (indicator) {
@@ -690,8 +943,16 @@ export function showUnreadIndicator(peerId, show) {
 }
 
 // Handles clicking on a contact in the list
+// --- MODIFIED: Only allow clicking confirmed contacts ---
 export async function handleContactClick(event) {
     const targetElement = event.currentTarget; // The div.contact-item
+
+    // Check if the clicked item is a confirmed contact
+    if (!targetElement.classList.contains('confirmed-contact')) {
+        console.log("Clicked on a non-confirmed contact (request). Ignoring chat switch.");
+        return;
+    }
+
     const clickedPeerId = targetElement.dataset.peerId;
     const currentActivePeerId = state.getActiveChatPeerId();
 
@@ -863,6 +1124,15 @@ export function clearChatInput() {
  */
 function showContextMenu(event, peerId) {
     event.preventDefault(); // Prevent the default browser context menu
+
+    // Find the element to check its type
+    const targetElement = dom.contactsListContainer.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
+    if (!targetElement || !targetElement.classList.contains('confirmed-contact')) {
+         console.log("Context menu attempt on non-confirmed contact. Ignoring.");
+         hideContextMenu(); // Ensure any previous menu is hidden
+         return;
+    }
+
     contextMenuPeerId = peerId; // Store the peer ID for the action
 
     if (!dom.contactContextMenu) return;
@@ -970,11 +1240,17 @@ function hideContextMenuOnClickOutside(event) {
  * Also deletes associated chat history.
  * @param {string} peerId The ID of the contact to delete.
  */
-async function handleDeleteContact(peerId) { // Added async keyword
+async function handleDeleteContact(peerId) {
     if (!peerId) return;
 
+    // Double-check it's actually a contact
     const contact = state.contacts[peerId];
-    const name = contact?.name || peerId;
+    if (!contact) {
+         console.warn(`handleDeleteContact called for non-contact ID: ${peerId}`);
+         return;
+    }
+
+    const name = contact.name || peerId;
 
     // Confirmation dialog
     if (confirm(`您确定要删除联系人 "${escapeHTML(name)}" 吗？\n相关的聊天记录和连接状态将被清除。`)) {
@@ -1007,7 +1283,7 @@ async function handleDeleteContact(peerId) { // Added async keyword
             } else {
                 // This case might be less likely if removeContact is robust, but handle it
                 console.error(`Failed to remove contact ${peerId} from state after history deletion.`);
-                addSystemMessage(`删除联系人 ${escapeHTML(name)} 时发生错误（状态更新失败）。`, null, true);
+                addSystemMessage(`删除联系人 ${escapeHTML(name)} 的聊天记录时出错。联系人本身可能未被删除。`, null, true);
             }
 
         } catch (error) {
@@ -1029,11 +1305,7 @@ async function handleDeleteContact(peerId) { // Added async keyword
     }
 }
 
-// --- NEW: Handle clearing chat history ---
-/**
- * Handles clearing local chat history for a specific contact after confirmation.
- * @param {string} peerId The ID of the contact whose history should be cleared.
- */
+// --- Handle clearing chat history (remains the same, but should only be callable for confirmed contacts via context menu) ---
 async function handleClearHistory(peerId) {
     if (!peerId) {
         console.warn("handleClearHistory called without peerId.");
@@ -1070,12 +1342,98 @@ async function handleClearHistory(peerId) {
         console.log(`Clearing history cancelled for ${peerId}`);
     }
 }
-// --- END NEW ---
+
+// --- NEW: Function to update a contact's name in the list ---
+/**
+ * Updates the display name of a contact in the contact list UI.
+ * @param {string} peerId The ID of the contact.
+ * @param {string} newName The new name for the contact.
+ */
+export function updateContactName(peerId, newName) {
+    if (!dom.contactsListContainer) return;
+    // Find the specific contact item (only confirmed contacts have names updated this way)
+    const contactElement = dom.contactsListContainer.querySelector(`.contact-item.confirmed-contact[data-peer-id="${peerId}"]`);
+    if (contactElement) {
+        const nameSpan = contactElement.querySelector('.contact-name');
+        const avatarImg = contactElement.querySelector('img');
+        const nameEscaped = escapeHTML(newName);
+
+        if (nameSpan) {
+            nameSpan.textContent = nameEscaped;
+            nameSpan.title = nameEscaped; // Update tooltip as well
+        }
+        if (avatarImg) {
+            const avatarText = escapeHTML(newName.charAt(0).toUpperCase());
+            // Update avatar text (assuming placeholder image URL structure)
+            // Extract existing color from src
+            const match = avatarImg.src.match(/\/([0-9a-fA-F]{6})\//);
+            const avatarColor = match ? match[1] : '2c2f33'; // Default color if regex fails
+            avatarImg.src = `https://placehold.co/32x32/${avatarColor}/ffffff?text=${avatarText}`;
+            // Update avatar title to include the new name
+            const statusTitle = avatarImg.title.split(' - ').pop() || '状态未知'; // Try to preserve status part of title
+            avatarImg.title = `${nameEscaped} (${peerId}) - ${statusTitle}`;
+        }
+        console.log(`Updated contact name UI for ${peerId} to ${nameEscaped}`);
+    } else {
+        console.warn(`Contact element not found for peerId: ${peerId} during name UI update.`);
+    }
+}
+
+// --- NEW: Function to add a single contact item to the list ---
+/**
+ * Adds a single confirmed contact item to the UI list in alphabetical order.
+ * @param {object} contact The contact object { id, name, online }.
+ */
+export function addContactToList(contact) {
+    if (!dom.contactsListContainer) return;
+
+    const newElement = createContactItemElement(contact);
+    if (!newElement) return;
+
+    let confirmedContactsContainer = dom.contactsListContainer.querySelector('#confirmed-contacts');
+
+    // If the confirmed contacts section doesn't exist, create it
+    if (!confirmedContactsContainer) {
+        confirmedContactsContainer = document.createElement('div');
+        confirmedContactsContainer.id = 'confirmed-contacts';
+        confirmedContactsContainer.innerHTML = `<h3 class="px-3 pt-3 pb-1 text-xs font-semibold uppercase text-discord-text-muted">好友</h3>`;
+        // Insert it before pending requests if they exist, otherwise append
+        const firstRequestSection = dom.contactsListContainer.querySelector('#pending-incoming-requests, #pending-outgoing-requests');
+        if (firstRequestSection) {
+             dom.contactsListContainer.insertBefore(confirmedContactsContainer, firstRequestSection);
+        } else {
+             dom.contactsListContainer.appendChild(confirmedContactsContainer);
+        }
+        // Remove potential "empty" message
+        const emptyMsg = dom.contactsListContainer.querySelector('p.text-discord-text-muted');
+        if (emptyMsg) emptyMsg.remove();
+    }
+
+    // Find the correct position to insert the new element alphabetically
+    const existingContactElements = confirmedContactsContainer.querySelectorAll('.contact-item.confirmed-contact');
+    let inserted = false;
+    for (const existingElement of existingContactElements) {
+        const existingName = existingElement.querySelector('.contact-name').textContent;
+        const newName = newElement.querySelector('.contact-name').textContent;
+        if (newName.localeCompare(existingName) < 0) {
+            confirmedContactsContainer.insertBefore(newElement, existingElement);
+            inserted = true;
+            break;
+        }
+    }
+
+    // If not inserted (it's the last one alphabetically or the only one), append it
+    if (!inserted) {
+        confirmedContactsContainer.appendChild(newElement);
+    }
+
+    console.log(`Added contact ${contact.id} to UI list.`);
+}
 
 // --- Initialization ---
 export function initializeUI() {
     console.log("Initializing UI...");
-    // Initial render of contact list
+    // Initial render (will now include pending requests)
     renderContactList();
     // Set initial empty state message
     updateEmptyState();
@@ -1088,7 +1446,7 @@ export function initializeUI() {
     // Clear any leftover typing indicators
     hideActiveTypingIndicator();
 
-    // Hide context menu initially (redundant due to 'hidden' class, but good practice)
+    // Hide context menu initially
     hideContextMenu();
 
     console.log("UI Initialized.");
