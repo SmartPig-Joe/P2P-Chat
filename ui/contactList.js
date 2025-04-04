@@ -1,8 +1,8 @@
 // ui/contactList.js
-import * as dom from '/src/dom.js';
-import * as state from '/src/state.js';
-import * as connection from '/src/connection.js';
-import { escapeHTML } from '/src/utils.js';
+import * as dom from '../src/dom.js';
+import * as state from '../src/state.js';
+import * as connection from '../src/connection.js';
+import { escapeHTML } from '../src/utils.js';
 import { getAvatarColor } from './main.js'; // Import from ui/main.js
 import { showContextMenu } from './contextMenu.js';
 import { clearMessageList, addSystemMessage } from './messages.js'; // Needed for request handling, switching chat

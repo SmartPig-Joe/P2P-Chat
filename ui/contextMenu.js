@@ -1,8 +1,8 @@
 // ui/contextMenu.js
-import * as dom from '/src/dom.js';
-import * as state from '/src/state.js';
-import * as storage from '/src/storage.js'; // Needed for deleting history/contact
-import { escapeHTML } from '/src/utils.js';
+import * as dom from '../src/dom.js';
+import * as state from '../src/state.js';
+import * as storage from '../src/storage.js'; // Needed for deleting history/contact
+import { escapeHTML } from '../src/utils.js';
 import { renderContactList } from './contactList.js'; // Needed after delete
 import { clearMessageList, addSystemMessage } from './messages.js'; // Needed after delete/clear history
 import { updateChatHeader, updateChatInputVisibility, updateEmptyState, hideActiveTypingIndicator } from './chatArea.js'; // Needed after delete/clear history

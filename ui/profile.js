@@ -1,10 +1,10 @@
 // ui/profile.js
-import * as dom from '/src/dom.js';
-import * as state from '/src/state.js';
-import { escapeHTML } from '/src/utils.js';
+import * as dom from '../src/dom.js';
+import * as state from '../src/state.js';
+import { escapeHTML } from '../src/utils.js';
 import { getAvatarColor } from './main.js'; // Import from ui/main.js
 import { renderContactList } from './contactList.js'; // Needed to update self name/avatar
-import { loadAndDisplayHistory } from '/src/connection.js'; // Needed to update messages
+import { loadAndDisplayHistory } from '../src/connection.js'; // Needed to update messages
 
 
 // Display local user ID (e.g., in settings or profile area)

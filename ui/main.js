@@ -1,9 +1,9 @@
 // ui/main.js
-import * as dom from '/src/dom.js';
-import * as state from '/src/state.js';
+import * as dom from '../src/dom.js';
+import * as state from '../src/state.js';
 console.log("[ui/main.js] State module imported:", state);
-import * as connection from '/src/connection.js'; // Needed for initializeUI -> loadAndDisplayHistory
-import { escapeHTML, formatTime, getUserColorClass, formatBytes } from '/src/utils.js';
+import * as connection from '../src/connection.js'; // Needed for initializeUI -> loadAndDisplayHistory
+import { escapeHTML, formatTime, getUserColorClass, formatBytes } from '../src/utils.js';
 import { renderContactList, showUnreadIndicator } from './contactList.js'; // Removed addContactToList, removeIncomingRequestUI, updateRequestSectionHeaders
 import { clearMessageList, scrollToBottom, addSystemMessage, displayMessage, updateFileMessageProgress, updateFileMessageStatusToReceived } from './messages.js';
 import { updateChatHeader, updateChatInputVisibility, updateEmptyState, showTypingIndicator, hideActiveTypingIndicator } from './chatArea.js'; // Added chatArea functions
