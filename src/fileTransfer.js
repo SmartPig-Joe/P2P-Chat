@@ -6,7 +6,7 @@ import * as ui from '../ui/index.js';
 import { FILE_CHUNK_SIZE } from './constants.js';
 import { escapeHTML, formatBytes } from './utils.js';
 // import { getSelectedPeerId, updateFileMessageProgress } from '../ui/index.js'; // Corrected path (commented)
-import { updateFileMessageProgress } from '../ui/index.js'; // Corrected path
+import { updateFileMessageProgress, addObjectURLToTrack, untrackAndRevokeObjectURL } from '../ui/index.js'; // Corrected path, Added addObjectURLToTrack, untrackAndRevokeObjectURL
 
 // --- Sending Files ---
 
@@ -57,12 +57,34 @@ export function handleFileSelect(event) {
         peerId: recipientPeerId // Identify the intended recipient (relevant for storage/UI)
     };
 
-    try {
-        const messageToSend = { type: 'fileMeta', payload: fileInfo }; // Changed type to 'fileMeta'
-        dataChannel.send(JSON.stringify(messageToSend)); // Use specific dataChannel
-        console.log("Sent fileMeta:", fileInfo);
+    // --- Create local preview URL for images ---
+    let localPreviewUrl = null;
+    const isImage = fileInfo.type.startsWith('image/');
+    if (isImage) {
+        try {
+            localPreviewUrl = URL.createObjectURL(file);
+            console.log(`[Debug] Created local preview URL for ${transferId}: ${localPreviewUrl}`);
+            // Add to fileInfo payload that goes to the UI
+            fileInfo.localPreviewUrl = localPreviewUrl;
+            // Track this URL for cleanup
+            ui.addObjectURLToTrack(localPreviewUrl);
+        } catch (e) {
+            console.error(`[Debug] Failed to create local object URL for image:`, e);
+            // Proceed without local preview if URL creation fails
+        }
+    }
+    // --- End local preview URL creation ---
 
-        // Display placeholder in UI immediately
+    try {
+        const messageToSend = {
+            type: 'fileMeta',
+            // Don't send localPreviewUrl to the peer
+            payload: { ...fileInfo, localPreviewUrl: undefined }
+         };
+        dataChannel.send(JSON.stringify(messageToSend)); // Use specific dataChannel
+        console.log("Sent fileMeta:", messageToSend.payload);
+
+        // Display placeholder/preview in UI immediately
         // Create a message object suitable for the UI layer
         const messageForUi = {
             id: transferId, // Use transferId as the message ID for UI tracking
@@ -70,14 +92,21 @@ export function handleFileSelect(event) {
             senderId: state.localUserId,
             peerId: recipientPeerId,
             timestamp: fileInfo.timestamp,
-            payload: fileInfo // The payload remains the fileInfo object
+            // Pass the complete fileInfo (including localPreviewUrl if available) to the local UI
+            payload: fileInfo
         };
-        ui.displayMessage(recipientPeerId, messageForUi); // Pass the correctly structured message
-        ui.updateFileMessageProgress(recipientPeerId, transferId, 0); // Set initial progress to 0
+        ui.displayMessage(recipientPeerId, messageForUi); // Pass the message with potential localPreviewUrl
+
+        // Don't immediately set progress to 0 if we have a preview, let createFileContentHTML handle initial state
+        // ui.updateFileMessageProgress(recipientPeerId, transferId, 0);
 
     } catch (e) {
-        console.error("[Debug] handleFileSelect: Failed to send fileMeta:", e);
-        ui.addSystemMessage(`发送文件 ${escapeHTML(file.name)} 的元信息失败。`, recipientPeerId, true);
+        console.error("[Debug] handleFileSelect: Failed to send fileMeta or display message:", e);
+        ui.addSystemMessage(`发送文件 ${escapeHTML(file.name)} 的元信息或显示消息失败。`, recipientPeerId, true);
+        // Clean up blob URL if created but sending failed
+        if (localPreviewUrl) {
+            ui.untrackAndRevokeObjectURL(localPreviewUrl);
+        }
         return;
     }
 
@@ -361,23 +390,7 @@ function assembleFile(transferId, fileData) {
         console.error(`[${transferId}] Error creating Blob or Object URL:`, error);
         ui.addSystemMessage(`处理接收到的文件 ${escapeHTML(fileData.info.name)} 时出错。`, peerId, true);
         ui.updateFileMessageProgress(peerId, transferId, -1); // Mark as failed
+        return null; // Indicate failure
     }
     // Cleanup is now handled in handleIncomingDataChunk after calling assembleFile
 }
-
-// --- Utility / Cleanup ---
-
-// Cleanup function - Needs refinement. Should be called when closing tabs/connections.
-// export function cleanupFileBlobs() {
-//     const incomingFiles = state.incomingFiles;
-//     Object.values(incomingFiles).forEach(file => {
-//         if (file.url) {
-//             console.log(`Revoking Object URL: ${file.url}`);
-//             URL.revokeObjectURL(file.url);
-//             file.url = null; // Clear the URL after revoking
-//         }
-//     });
-//     // It might be prudent to clear the incomingFiles state here or somewhere appropriate
-//     // state.setIncomingFiles({});
-//     // console.log("Object URLs revoked and incoming files state possibly cleared.");
-// } 

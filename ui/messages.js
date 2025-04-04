@@ -203,15 +203,16 @@ export function displayMessage(peerId, message) {
 
 // --- File Messages (Refactored) ---
 
-// Renders just the content part of a file message (icon, name, size, status/action)
+// Renders just the content part of a file message (icon, name, size, status/action OR image preview)
 // Used by createMessageHTML and updateFileMessageProgress
 function createFileContentHTML(fileInfo, isLocal, downloadUrl = null, progress = 0) {
     // Use formatBytes imported from utils.js
     const fileSizeFormatted = formatBytes(fileInfo.size);
     const fileNameEscaped = escapeHTML(fileInfo.name);
     const transferId = fileInfo.transferId;
+    const localPreviewUrl = fileInfo.localPreviewUrl; // <<< Get local preview URL
     // Store original size and name as data attributes for later updates
-    const dataAttrs = `data-transfer-id="${transferId}" data-file-size="${fileInfo.size}" data-file-name="${fileNameEscaped}"`;
+    const dataAttrs = `data-transfer-id="${transferId}" data-file-size="${fileInfo.size}" data-file-name="${fileNameEscaped}" data-file-type="${escapeHTML(fileInfo.type || '')}"`; // Add file type
 
     const fileIconClasses = "material-symbols-outlined text-3xl text-discord-text-muted flex-shrink-0 mr-3";
     const downloadIconClasses = "material-symbols-outlined text-xl";
@@ -222,55 +223,122 @@ function createFileContentHTML(fileInfo, isLocal, downloadUrl = null, progress =
     let statusText = '';
     let iconHTML = `<span class="${fileIconClasses}">description</span>`; // Default file icon
     let actionHTML = ''; // Initialize actionHTML, will be placed inside the container
+    let contentBodyHTML = ''; // To hold either file info or image preview
 
     const isFailed = progress < 0;
     const isComplete = progress >= 1;
+    const isImage = fileInfo.type && fileInfo.type.startsWith('image/');
 
-    // --- Logic to determine icon, statusText, actionHTML based on progress ---
-    if (isFailed) {
+    // --- Logic for rendering ---
+
+    // <<< NEW: Handle Local Image Preview FIRST >>>
+    if (isLocal && isImage && localPreviewUrl) {
+        console.log(`[UI Create ${transferId}] Rendering local image preview.`);
+        iconHTML = '';
+        statusText = ''; // No status text needed initially for preview
+        actionHTML = ''; // No action needed initially
+        contentBodyHTML = `
+            <a href="${localPreviewUrl}" target="_blank" rel="noopener noreferrer" title="在新标签页打开图片: ${fileNameEscaped}" class="block max-w-xs max-h-64 rounded overflow-hidden cursor-pointer group relative">
+                <img src="${localPreviewUrl}" alt="${fileNameEscaped}" class="max-w-full max-h-64 object-contain group-hover:opacity-80 transition-opacity">
+                <div class="absolute bottom-1 right-1 bg-black/50 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                   ${fileNameEscaped} (${fileSizeFormatted})
+                   <span class="material-symbols-outlined text-sm align-middle ml-1">open_in_new</span>
+                   <!-- Add a sending indicator? -->
+                   <span class="material-symbols-outlined text-sm align-middle ml-1 sending-indicator text-discord-text-muted" title="发送中">schedule_send</span>
+                </div>
+            </a>`;
+        // We don't track localPreviewUrl here again, it was tracked in fileTransfer.js
+
+    } else if (isFailed) {
         statusText = `<div class="text-xs text-discord-red">${fileSizeFormatted} - 传输失败</div>`;
         iconHTML = `<span class="${errorIconClasses} flex-shrink-0 mr-3">error</span>`;
-        actionHTML = ''; // No action on failure
-    } else if (isComplete) { // Handle completion actions
-        if (downloadUrl) { // Receiver completed
-            statusText = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted}</div>`;
-            // Generate download link HTML
-            actionHTML = `
-                <a href="${downloadUrl}" download="${fileNameEscaped}" class="text-discord-text-muted hover:text-white p-1 rounded hover:bg-discord-gray-3 download-link" title="下载">
-                    <span class="${downloadIconClasses}">download</span>
-                </a>`;
-             addObjectURLToTrack(downloadUrl); // Track the URL
-        } else if (isLocal) { // Sender completed
+        actionHTML = '';
+        // Render standard file info even on failure
+        contentBodyHTML = `
+            <div class="flex-1 min-w-0">\
+                 <div class="font-medium text-discord-text-link truncate" title="${fileNameEscaped}">${fileNameEscaped}</div>\
+                 ${statusText}\
+            </div>`;
+    } else if (isComplete) { // This block now primarily handles receiver completion, or sender non-image completion
+        if (downloadUrl) { // Receiver completed download
+            if (isImage) {
+                // --- Render Image Preview --- (Receiver)
+                iconHTML = ''; // No separate icon for images
+                statusText = ''; // No separate status text
+                actionHTML = ''; // Action is the clickable image itself
+                contentBodyHTML = `
+                    <a href="${downloadUrl}" target="_blank" rel="noopener noreferrer" title="在新标签页打开图片: ${fileNameEscaped}" class="block max-w-xs max-h-64 rounded overflow-hidden cursor-pointer group relative">
+                        <img src="${downloadUrl}" alt="${fileNameEscaped}" class="max-w-full max-h-64 object-contain group-hover:opacity-80 transition-opacity">
+                        <div class="absolute bottom-1 right-1 bg-black/50 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                           ${fileNameEscaped} (${fileSizeFormatted})
+                           <span class="material-symbols-outlined text-sm align-middle ml-1">open_in_new</span>
+                        </div>
+                    </a>`;
+                addObjectURLToTrack(downloadUrl); // Track the URL
+            } else {
+                // --- Render Standard File Info (Completed Download - Receiver Non-Image) ---
+                statusText = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted}</div>`;
+                actionHTML = `
+                    <a href="${downloadUrl}" download="${fileNameEscaped}" class="text-discord-text-muted hover:text-white p-1 rounded hover:bg-discord-gray-3 download-link" title="下载 ${fileNameEscaped}">
+                        <span class="${downloadIconClasses}">download</span>
+                    </a>`;
+                 addObjectURLToTrack(downloadUrl); // Track the URL
+                 // Standard file info body
+                 contentBodyHTML = `
+                    <div class="flex-1 min-w-0">\
+                         <div class="font-medium text-discord-text-link truncate" title="${fileNameEscaped}">${fileNameEscaped}</div>\
+                         ${statusText}\
+                    </div>`;
+            }
+        } else if (isLocal) { // Sender completed upload (Non-Image, Image handled by updateFileMessageProgress)
+            // This will likely only be hit if update logic fails or runs before create
             statusText = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted} - 已发送</div>`;
             iconHTML = `<span class="${checkIconClasses} flex-shrink-0 mr-3">check_circle</span>`;
             actionHTML = ''; // No action needed for sender on completion
-        } else { // Receiver completed (fallback if no URL)
+            contentBodyHTML = `
+                <div class="flex-1 min-w-0">\
+                     <div class="font-medium text-discord-text-link truncate" title="${fileNameEscaped}">${fileNameEscaped}</div>\
+                     ${statusText}\
+                </div>`;
+        } else { // Receiver completed (fallback if no URL or not image)
              statusText = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted} - 已接收</div>`;
              iconHTML = `<span class="${checkIconClasses} flex-shrink-0 mr-3">check_circle</span>`;
-             actionHTML = ''; // No action if download URL missing
+             actionHTML = ''; // No action if download URL missing or not applicable
+             contentBodyHTML = `
+                <div class="flex-1 min-w-0">\
+                     <div class="font-medium text-discord-text-link truncate" title="${fileNameEscaped}">${fileNameEscaped}</div>\
+                     ${statusText}\
+                </div>`;
         }
-    } else { // In progress
+    } else { // In progress (and not a local image preview)
         const progressPercent = Math.round(progress * 100);
         statusText = `
-            <div class="text-xs text-discord-text-muted">${fileSizeFormatted} - ${isLocal ? '正在发送' : '正在接收'} ${progressPercent}%</div>
+            <div class="text-xs text-discord-text-muted">${isLocal ? '正在发送' : '正在接收'} ${progressPercent}%</div>
             <div class="w-full bg-discord-gray-1 rounded-full h-1 mt-1 overflow-hidden">
                 <div class="bg-discord-blurple h-1 rounded-full" style="width: ${progressPercent}%"></div>
             </div>`;
         iconHTML = `<span class="${progressIconClasses} flex-shrink-0 mr-3 animate-spin">sync</span>`; // Add animate-spin here directly
+        contentBodyHTML = `
+            <div class="flex-1 min-w-0">\
+                 <div class="font-medium text-discord-text-link truncate" title="${fileNameEscaped}">${fileNameEscaped}</div>\
+                 ${statusText}\
+            </div>`;
     }
-    // --- End Status/Icon/Action Logic ---
+    // --- End Rendering Logic ---
 
-    // Apply data attributes to the container
+    // Determine container class based on content type
+    const containerClasses = (isImage && isComplete && downloadUrl && !isLocal) || (isImage && isLocal && localPreviewUrl)
+        ? "mt-1 relative file-content image-preview-container" // Image preview container (receiver or sender)
+        : "mt-1 bg-discord-gray-3 p-3 rounded-lg flex items-center file-content"; // Standard file container
+
+    // Assemble the final HTML
+    // For images, contentBodyHTML contains the full <a><img> structure
+    // For files, it contains the text part, and we add icon and action button around it
     return `
-        <div class="mt-1 bg-discord-gray-3 p-3 rounded-lg flex items-center file-content" ${dataAttrs}>
-            ${iconHTML}
-            <div class="flex-1 min-w-0">
-                 <div class="font-medium text-discord-text-link truncate" title="${fileNameEscaped}">${fileNameEscaped}</div>
-                 ${statusText}
-            </div>
-            <div class="file-action-container ml-auto flex-shrink-0 pl-2">
-                ${actionHTML}
-            </div>
+        <div class="${containerClasses}" ${dataAttrs}>
+            ${(isImage && ((isComplete && downloadUrl && !isLocal) || (isLocal && localPreviewUrl))) ? '' : iconHTML}
+            ${contentBodyHTML}
+            ${(isImage && ((isComplete && downloadUrl && !isLocal) || (isLocal && localPreviewUrl))) ? '' : `<div class="file-action-container ml-auto flex-shrink-0 pl-2">${actionHTML}</div>`}
         </div>
     `;
 }
@@ -299,15 +367,11 @@ export function updateFileMessageProgress(peerId, transferId, progress, download
             // Read static file info from data attributes
             const fileSize = parseInt(fileContentElement.dataset.fileSize || '0', 10);
             const fileName = fileContentElement.dataset.fileName || 'unknown_file';
+            const fileType = fileContentElement.dataset.fileType || ''; // <<< Get file type
             const fileSizeFormatted = formatBytes(fileSize);
-            console.log(`[UI Update] Read from data attributes - Size: ${fileSize}, Name: ${fileName}`);
+            console.log(`[UI Update] Read from data attributes - Size: ${fileSize}, Name: ${fileName}, Type: ${fileType}`);
 
             const isLocal = messageElement.getAttribute('data-sender-id') === state.localUserId;
-
-            // Find existing elements to update
-            const iconElement = fileContentElement.querySelector('.material-symbols-outlined'); // First icon
-            const statusContainer = fileContentElement.querySelector('.flex-1.min-w-0');
-            const actionContainer = fileContentElement.querySelector('.file-action-container');
 
             // --- State Check using data attribute ---
             const hasReachedFinalState = messageElement.dataset.transferState === 'complete' || messageElement.dataset.transferState === 'failed' || messageElement.dataset.transferState === 'delivered';
@@ -318,7 +382,6 @@ export function updateFileMessageProgress(peerId, transferId, progress, download
                 return; // Prevent resetting UI from final state back to in-progress
             }
              // If the update is for a final state, but the current state is already a *different* final state, ignore.
-             // E.g., don't process 'failed' if already 'delivered' or 'complete'.
              const isNewStateFinal = progress < 0 || progress >= 1;
              if (hasReachedFinalState && isNewStateFinal) {
                   const newState = progress < 0 ? 'failed' : 'complete'; // 'complete' covers sender complete, receiver complete, delivered
@@ -333,129 +396,192 @@ export function updateFileMessageProgress(peerId, transferId, progress, download
             // --- Update Logic ---
             const isFailed = progress < 0;
             const isComplete = progress >= 1;
-            let newIconClass = 'description'; // Default file icon
-            let newIconColorClass = 'text-discord-text-muted';
-            let newStatusHTML = '';
-            let spinClass = false;
+            const isImage = fileType.startsWith('image/'); // <<< Check if it's an image
 
-             if (isFailed) {
-                 newIconClass = 'error';
-                 newIconColorClass = 'text-discord-red';
-                 const statusText = `${fileSizeFormatted} - 传输失败`;
-                 newStatusHTML = `<div class="text-xs text-discord-red">${statusText}</div>`;
-             } else if (isComplete) {
-                 let statusText = fileSizeFormatted;
-                 newIconClass = 'description';
-                 if (downloadUrl) { // Receiver completed with URL
-                      // Status text remains just the size
-                 } else if (isLocal) { // Sender completed
-                     newIconClass = 'check_circle';
-                     newIconColorClass = 'text-discord-green';
-                     statusText = `${fileSizeFormatted} - 已发送`;
-                 } else { // Receiver completed (fallback if no URL)
-                     newIconClass = 'check_circle';
-                     newIconColorClass = 'text-discord-green';
-                     statusText = `${fileSizeFormatted} - 已接收`;
-                 }
-                 newStatusHTML = `<div class="text-xs text-discord-text-muted">${statusText}</div>`;
-             } else { // In progress
-                 const progressPercent = Math.round(progress * 100);
-                 newIconClass = 'sync';
-                 newIconColorClass = 'text-discord-blurple';
-                 spinClass = true;
-                 const statusText = `${fileSizeFormatted} - ${isLocal ? '正在发送' : '正在接收'} ${progressPercent}%`;
-                 newStatusHTML = `
-                    <div class="text-xs text-discord-text-muted">${statusText}</div>
-                    <div class="w-full bg-discord-gray-1 rounded-full h-1 mt-1 overflow-hidden">
-                        <div class="bg-discord-blurple h-1 rounded-full" style="width: ${progressPercent}%"></div>
-                    </div>`;
-             }
-             console.log(`[UI Update ${transferId}] Determined state: isFailed=${isFailed}, isComplete=${isComplete}, spinClass=${spinClass}, newStatusHTML='${newStatusHTML}'`);
-
-            // Apply Updates
-            // 1. Update Icon
-            if (iconElement) {
-                console.log(`[UI Update ${transferId}] Updating icon to: ${newIconClass}, Color: ${newIconColorClass}, Spin: ${spinClass}`);
-                iconElement.textContent = newIconClass;
-                iconElement.className = `material-symbols-outlined text-3xl flex-shrink-0 mr-3 ${newIconColorClass}`; // Reset class list
-                iconElement.classList.toggle('animate-spin', spinClass);
-            }
-
-            // 2. Update Status Area
-            if (statusContainer) {
-                const filenameDiv = statusContainer.querySelector('.font-medium.text-discord-text-link');
-                if (filenameDiv) {
-                    console.log(`[UI Update ${transferId}] Rebuilding status container content.`);
-                    const tempFilenameDiv = filenameDiv.cloneNode(true);
-                    statusContainer.innerHTML = '';
-                    statusContainer.appendChild(tempFilenameDiv);
-                    statusContainer.insertAdjacentHTML('beforeend', newStatusHTML);
-                } else {
-                     console.warn(`[UI Update ${transferId}] Filename div not found in status container. Setting innerHTML directly.`);
-                     const fallbackFilenameHTML = `<div class="font-medium text-discord-text-link truncate" title="${fileName}">${fileName}</div>`;
-                     statusContainer.innerHTML = fallbackFilenameHTML + newStatusHTML;
+            // <<< NEW: Prevent overwriting local image preview on sender completion >>>
+            if (isComplete && isLocal && isImage) {
+                console.log(`[UI Update ${transferId}] Sender completed image upload. Keeping preview, updating indicator.`);
+                // Optionally update an indicator within the preview (e.g., remove 'sending' icon)
+                const sendingIndicator = fileContentElement.querySelector('.sending-indicator');
+                if (sendingIndicator) {
+                    // Replace sending icon with a checkmark
+                     sendingIndicator.textContent = 'check_circle';
+                     sendingIndicator.classList.remove('text-discord-text-muted'); // Remove muted color
+                     sendingIndicator.classList.add('text-discord-green'); // Make it green
+                     sendingIndicator.title = '已发送';
                 }
-            } else {
-                 console.warn(`[UI Update ${transferId}] Status container (.flex-1.min-w-0) not found.`);
+                // Mark as complete in dataset (will be handled commonly below)
+                // return; // IMPORTANT: Do NOT return here, let common state update run
             }
+            // --- End Local Image Completion Handling ---
 
-             // 3. Update Action Area (Download Link)
-             // Revoke old URL *before* potentially creating a new one
-             const oldUrl = messageElement.dataset.downloadUrl;
-             if (oldUrl && downloadUrl && oldUrl !== downloadUrl) {
-                 console.log(`[UI Update ${transferId}] Revoking old ObjectURL: ${oldUrl}`);
-                 // URL.revokeObjectURL(oldUrl); // Handled by untrackAndRevokeObjectURL
-                 untrackAndRevokeObjectURL(oldUrl);
-             }
+            if (isComplete && downloadUrl && isImage && !isLocal) {
+                // --- SPECIAL CASE: Update to Image Preview for Receiver ---
+                console.log(`[UI Update ${transferId}] Completed receiver download is an image. Updating to preview.`);
 
-             if (actionContainer) {
-                 if (isComplete && downloadUrl) {
-                     console.log(`[UI Update ${transferId}] Transfer complete for receiver. Updating download link. URL: ${downloadUrl}`);
-                     let linkElement = actionContainer.querySelector('a.download-link');
-                     if (!linkElement) {
-                         console.log(`[UI Update ${transferId}] Download link <a> not found, creating new one.`);
-                         linkElement = document.createElement('a');
-                         linkElement.className = 'text-discord-text-muted hover:text-white p-1 rounded hover:bg-discord-gray-3 download-link';
-                         linkElement.title = '下载';
-                         linkElement.innerHTML = '<span class="material-symbols-outlined text-xl">download</span>';
-                         actionContainer.innerHTML = ''; // Clear previous actions
-                         actionContainer.appendChild(linkElement);
+                const imagePreviewHTML = `
+                    <a href="${downloadUrl}" target="_blank" rel="noopener noreferrer" title="在新标签页打开图片: ${fileName}" class="block max-w-xs max-h-64 rounded overflow-hidden cursor-pointer group relative">
+                        <img src="${downloadUrl}" alt="${fileName}" class="max-w-full max-h-64 object-contain group-hover:opacity-80 transition-opacity">
+                        <div class="absolute bottom-1 right-1 bg-black/50 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                           ${fileName} (${fileSizeFormatted})
+                           <span class="material-symbols-outlined text-sm align-middle ml-1">open_in_new</span>
+                        </div>
+                    </a>`;
+
+                // Replace the entire content element's structure
+                fileContentElement.innerHTML = imagePreviewHTML;
+                // Update container classes
+                fileContentElement.className = 'mt-1 relative file-content image-preview-container';
+
+                // Track URL
+                addObjectURLToTrack(downloadUrl);
+                // Store URL in dataset
+                messageElement.dataset.downloadUrl = downloadUrl;
+
+            } else if (!(isComplete && isLocal && isImage)) { // <<< Exclude local image completion case here
+                 // --- STANDARD UPDATE LOGIC (Progress, Fail, Complete Non-Image, Complete Sender Non-Image) ---
+                 let newIconClass = 'description'; // Default file icon
+                 let newIconColorClass = 'text-discord-text-muted';
+                 let newStatusHTML = '';
+                 let spinClass = false;
+
+                 if (isFailed) {
+                     newIconClass = 'error';
+                     newIconColorClass = 'text-discord-red';
+                     const statusText = `${fileSizeFormatted} - 传输失败`;
+                     newStatusHTML = `<div class="text-xs text-discord-red">${statusText}</div>`;
+                 } else if (isComplete) { // Handles non-image completion for receiver/sender, or fallback
+                     let statusText = fileSizeFormatted;
+                     newIconClass = 'description'; // Default for non-image receiver complete
+                     if (downloadUrl && !isImage) { // Receiver completed non-image with URL
+                          // Status text remains just the size
+                     } else if (isLocal) { // Sender completed (Non-Image ONLY, Image handled above)
+                         newIconClass = 'check_circle';
+                         newIconColorClass = 'text-discord-green';
+                         statusText = `${fileSizeFormatted} - 已发送`;
+                     } else { // Receiver completed (fallback if no URL or image handled above)
+                         newIconClass = 'check_circle';
+                         newIconColorClass = 'text-discord-green';
+                         statusText = `${fileSizeFormatted} - 已接收`;
                      }
-                     linkElement.href = downloadUrl;
-                     linkElement.download = fileName;
-                     linkElement.classList.remove('hidden');
-                     console.log(`[UI Update ${transferId}] Download link href set to: ${linkElement.href}, download attribute to: ${linkElement.download}`);
+                     newStatusHTML = `<div class="text-xs text-discord-text-muted">${statusText}</div>`;
+                 } else { // In progress
+                     const progressPercent = Math.round(progress * 100);
+                     newIconClass = 'sync';
+                     newIconColorClass = 'text-discord-blurple';
+                     spinClass = true;
+                     const statusText = `${isLocal ? '正在发送' : '正在接收'} ${progressPercent}%`; // Removed filesize from progress for brevity
+                     newStatusHTML = `
+                        <div class="text-xs text-discord-text-muted">${statusText}</div>
+                        <div class="w-full bg-discord-gray-1 rounded-full h-1 mt-1 overflow-hidden">
+                            <div class="bg-discord-blurple h-1 rounded-full" style="width: ${progressPercent}%"></div>
+                        </div>`;
+                 }
+                 console.log(`[UI Update ${transferId}] Determined state: isFailed=${isFailed}, isComplete=${isComplete}, spinClass=${spinClass}, newStatusHTML='${newStatusHTML}'`);
 
-                     // Add the URL to the active set
-                     addObjectURLToTrack(downloadUrl);
-                     // Store new URL in dataset
-                     messageElement.dataset.downloadUrl = downloadUrl;
+                // Find elements again in case they were modified/removed
+                const iconElement = fileContentElement.querySelector('.material-symbols-outlined:not(.text-sm)'); // Avoid grabbing small icons inside status/action
+                const statusContainer = fileContentElement.querySelector('.flex-1.min-w-0');
+                const actionContainer = fileContentElement.querySelector('.file-action-container');
 
-                 } else if (isComplete || isFailed) {
-                     console.log(`[UI Update ${transferId}] Transfer complete for sender or failed. Clearing action container.`);
-                     actionContainer.innerHTML = ''; // Remove download button
-                     // Ensure data attribute is removed if no URL
-                     if (messageElement.dataset.downloadUrl) {
-                        untrackAndRevokeObjectURL(messageElement.dataset.downloadUrl); // Revoke if clearing action resulted in no URL
+                // Apply Updates
+                // 1. Update Icon (if it exists)
+                if (iconElement) {
+                    console.log(`[UI Update ${transferId}] Updating icon to: ${newIconClass}, Color: ${newIconColorClass}, Spin: ${spinClass}`);
+                    iconElement.textContent = newIconClass;
+                    // More robust class update
+                    const baseIconClasses = "material-symbols-outlined text-3xl flex-shrink-0 mr-3";
+                    iconElement.className = `${baseIconClasses} ${newIconColorClass}`;
+                    iconElement.classList.toggle('animate-spin', spinClass);
+                } else if (!isComplete || !downloadUrl || !isImage){ // Only warn if icon is expected
+                     console.warn(`[UI Update ${transferId}] Icon element not found (standard update).`);
+                }
+
+
+                // 2. Update Status Area (if it exists)
+                if (statusContainer) {
+                    const filenameDiv = statusContainer.querySelector('.font-medium.text-discord-text-link');
+                    if (filenameDiv) {
+                        console.log(`[UI Update ${transferId}] Rebuilding status container content (standard update).`);
+                        const tempFilenameDiv = filenameDiv.cloneNode(true);
+                        statusContainer.innerHTML = ''; // Clear everything
+                        statusContainer.appendChild(tempFilenameDiv); // Add filename back
+                        statusContainer.insertAdjacentHTML('beforeend', newStatusHTML); // Add new status/progress
+                    } else {
+                         console.warn(`[UI Update ${transferId}] Filename div not found in status container (standard update). Setting innerHTML directly.`);
+                         const fallbackFilenameHTML = `<div class="font-medium text-discord-text-link truncate" title="${fileName}">${fileName}</div>`;
+                         statusContainer.innerHTML = fallbackFilenameHTML + newStatusHTML;
+                    }
+                } else if (!isComplete || !downloadUrl || !isImage) { // Only warn if status is expected
+                     console.warn(`[UI Update ${transferId}] Status container (.flex-1.min-w-0) not found (standard update).`);
+                }
+
+
+                 // 3. Update Action Area (Download Link) (if it exists)
+                 // Revoke old URL *before* potentially creating a new one
+                 const oldUrl = messageElement.dataset.downloadUrl;
+                 if (oldUrl && downloadUrl && oldUrl !== downloadUrl) {
+                     console.log(`[UI Update ${transferId}] Revoking old ObjectURL: ${oldUrl}`);
+                     untrackAndRevokeObjectURL(oldUrl);
+                 }
+
+                 if (actionContainer) {
+                     if (isComplete && downloadUrl && !isImage) { // Only add download link for non-images
+                         console.log(`[UI Update ${transferId}] Transfer complete for receiver (non-image). Updating download link. URL: ${downloadUrl}`);
+                         let linkElement = actionContainer.querySelector('a.download-link');
+                         if (!linkElement) {
+                             console.log(`[UI Update ${transferId}] Download link <a> not found, creating new one.`);
+                             linkElement = document.createElement('a');
+                             linkElement.className = 'text-discord-text-muted hover:text-white p-1 rounded hover:bg-discord-gray-3 download-link';
+                             linkElement.title = `下载 ${fileName}`; // Add filename to title
+                             linkElement.innerHTML = '<span class="material-symbols-outlined text-xl">download</span>';
+                             actionContainer.innerHTML = ''; // Clear previous actions
+                             actionContainer.appendChild(linkElement);
+                         }
+                         linkElement.href = downloadUrl;
+                         linkElement.download = fileName;
+                         linkElement.classList.remove('hidden');
+                         console.log(`[UI Update ${transferId}] Download link href set to: ${linkElement.href}, download attribute to: ${linkElement.download}`);
+
+                         // Add the URL to the active set
+                         addObjectURLToTrack(downloadUrl);
+                         // Store new URL in dataset
+                         messageElement.dataset.downloadUrl = downloadUrl;
+
+                     } else if (isComplete || isFailed) { // Clear action for non-image complete or any failure
+                         console.log(`[UI Update ${transferId}] Transfer complete for sender (non-image) or failed. Clearing action container.`);
+                         actionContainer.innerHTML = ''; // Remove download button or other actions
+                         // Ensure data attribute is removed if no URL is associated with this state
+                         if (messageElement.dataset.downloadUrl && !isImage) { // Only revoke if we're not keeping it for an image
+                            untrackAndRevokeObjectURL(messageElement.dataset.downloadUrl);
+                         }
+                         // Remove the attribute only if we are not keeping the URL (e.g., for an image preview)
+                         if (!isImage || isFailed || (isComplete && !downloadUrl)) { // Delete if failed, or completed non-image sender, or completed non-image receiver without URL
+                            delete messageElement.dataset.downloadUrl;
+                         }
                      }
-                     delete messageElement.dataset.downloadUrl;
+                 } else if (!isComplete || !downloadUrl || !isImage){ // Only warn if action container is expected
+                      console.warn(`[UI Update ${transferId}] Action container (.file-action-container) not found (standard update).`);
                  }
-             } else {
-                  console.warn(`[UI Update ${transferId}] Action container (.file-action-container) not found.`);
-             }
 
-             // --- Update data attribute for state tracking ---
-             if (isComplete) {
-                 // Only set to 'complete' if not already 'delivered'
-                 if (messageElement.dataset.transferState !== 'delivered') {
-                    messageElement.dataset.transferState = 'complete';
+                 // Reset container class if we are in the standard update path
+                 if (!fileContentElement.classList.contains('image-preview-container')) {
+                    fileContentElement.className = 'mt-1 bg-discord-gray-3 p-3 rounded-lg flex items-center file-content';
                  }
-                 console.log(`[UI Update ${transferId}] Handling COMPLETE state (Progress: ${progress}). Final Status HTML: '${newStatusHTML}'. State: ${messageElement.dataset.transferState}`);
-             } else if (isFailed) {
-                 messageElement.dataset.transferState = 'failed';
-                 console.log(`[UI Update ${transferId}] Set data-transfer-state to 'failed'.`);
-             }
-             // --- END Update data attribute ---
+            } // End standard update logic else block
+
+            // --- Update data attribute for state tracking (Common for both image and non-image completion) ---
+            if (isComplete) {
+                // Only set to 'complete' if not already 'delivered'
+                if (messageElement.dataset.transferState !== 'delivered') {
+                   messageElement.dataset.transferState = 'complete';
+                }
+                console.log(`[UI Update ${transferId}] Set data-transfer-state to 'complete'.`);
+            } else if (isFailed) {
+                messageElement.dataset.transferState = 'failed';
+                console.log(`[UI Update ${transferId}] Set data-transfer-state to 'failed'.`);
+            }
+            // --- END Update data attribute ---
 
         } else {
              console.warn(`[UI Update] Could not find message element for transfer ID: ${transferId} to update progress.`);
@@ -484,6 +610,9 @@ export function updateFileMessageStatusToReceived(peerId, transferId) {
 
         if (messageElement) {
             console.log(`[UI Update ACK] Found message element for ${transferId} sent by local user.`);
+            const fileContentElement = messageElement.querySelector('.file-content');
+            const fileType = fileContentElement?.dataset.fileType || '';
+            const isImage = fileType.startsWith('image/');
 
             // Check if the transfer is already marked as failed or delivered
             const currentState = messageElement.dataset.transferState;
@@ -495,50 +624,57 @@ export function updateFileMessageStatusToReceived(peerId, transferId) {
                   console.log(`[UI Update ACK ${transferId}] Ignoring ACK update because transfer state is already 'delivered'.`);
                   return;
              }
-             // We should only update from 'complete' (meaning sent) to 'delivered'.
-             if (currentState !== 'complete') {
-                 console.log(`[UI Update ACK ${transferId}] Ignoring ACK update because transfer state is '${currentState}', not 'complete'. Maybe ACK arrived before send completion?`);
+             // We should ideally only update from 'complete' to 'delivered'.
+             // However, allow update from 'sending' (preview state) directly too.
+             if (currentState !== 'complete' && currentState !== 'sending') { // Allow update from sending/complete
+                 console.log(`[UI Update ACK ${transferId}] Ignoring ACK update because transfer state is '${currentState}'. Maybe ACK arrived before send completion?`);
                  // Optionally queue this update or handle differently? For now, ignore.
                  return;
              }
 
 
-            const fileContentElement = messageElement.querySelector('.file-content');
             if (fileContentElement) {
-                const fileSize = parseInt(fileContentElement.dataset.fileSize || '0', 10);
-                const fileName = fileContentElement.dataset.fileName || 'unknown_file';
-                const fileSizeFormatted = formatBytes(fileSize);
-
-                const statusContainer = fileContentElement.querySelector('.flex-1.min-w-0');
-
-                if (statusContainer) {
-                    console.log(`[UI Update ACK ${transferId}] Updating status text to '已送达'.`);
-                    const filenameDiv = statusContainer.querySelector('.font-medium.text-discord-text-link');
-                    // Add double check icon for delivered status
-                    const newStatusTextHTML = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted} - 已送达 <span class="material-symbols-outlined text-xs align-middle text-discord-green">done_all</span></div>`;
-
-                    if (filenameDiv) {
-                        // Clear existing status/progress bar (everything after filename)
-                        while (filenameDiv.nextSibling) {
-                            statusContainer.removeChild(filenameDiv.nextSibling);
-                        }
-                        // Append the new "Delivered" status
-                        statusContainer.insertAdjacentHTML('beforeend', newStatusTextHTML);
-
-                         const iconElement = fileContentElement.querySelector('.material-symbols-outlined');
-                         if (iconElement && iconElement.textContent === 'check_circle') {
-                             iconElement.title = "文件已送达";
-                         }
-
-                         // Mark state as delivered
-                         messageElement.dataset.transferState = 'delivered';
-                         console.log(`[UI Update ACK ${transferId}] Set data-transfer-state to 'delivered'.`);
-
+                if (isImage) {
+                    // --- Update Sender's Image Preview Indicator ---
+                    console.log(`[UI Update ACK ${transferId}] Updating sender image preview indicator to 'delivered'.`);
+                    // Find the indicator (might be check_circle or schedule_send)
+                    const statusIndicator = fileContentElement.querySelector('.sending-indicator, .material-symbols-outlined.text-sm.text-discord-green');
+                    if (statusIndicator) {
+                        statusIndicator.textContent = 'done_all'; // Double checkmark
+                        statusIndicator.classList.remove('text-discord-text-muted');
+                        statusIndicator.classList.add('text-discord-green');
+                        statusIndicator.title = '已送达';
+                        statusIndicator.classList.remove('sending-indicator'); // Remove class if it was there
                     } else {
-                        console.warn(`[UI Update ACK ${transferId}] Filename div not found within status container.`);
+                        console.warn(`[UI Update ACK ${transferId}] Could not find status indicator in image preview overlay.`);
                     }
+                    // Mark state as delivered
+                    messageElement.dataset.transferState = 'delivered';
+                    console.log(`[UI Update ACK ${transferId}] Set data-transfer-state to 'delivered'.`);
+
                 } else {
-                    console.warn(`[UI Update ACK ${transferId}] Status container (.flex-1.min-w-0) not found.`);
+                    // --- Update Standard File Info (Non-Image) ---
+                    const statusContainer = fileContentElement.querySelector('.flex-1.min-w-0');
+                    if (statusContainer) {
+                        console.log(`[UI Update ACK ${transferId}] Updating status text to '已送达'.`);
+                        const filenameDiv = statusContainer.querySelector('.font-medium.text-discord-text-link');
+                        const fileSize = parseInt(fileContentElement.dataset.fileSize || '0', 10);
+                        const fileSizeFormatted = formatBytes(fileSize);
+                        const newStatusTextHTML = `<div class="text-xs text-discord-text-muted">${fileSizeFormatted} - 已送达 <span class="material-symbols-outlined text-xs align-middle text-discord-green">done_all</span></div>`;
+
+                        if (filenameDiv) {
+                            while (filenameDiv.nextSibling) {
+                                statusContainer.removeChild(filenameDiv.nextSibling);
+                            }
+                            statusContainer.insertAdjacentHTML('beforeend', newStatusTextHTML);
+                            messageElement.dataset.transferState = 'delivered';
+                            console.log(`[UI Update ACK ${transferId}] Set data-transfer-state to 'delivered'.`);
+                        } else { 
+                            console.warn(`[UI Update ACK ${transferId}] Filename div not found within status container (non-image).`);
+                         }
+                    } else {
+                        console.warn(`[UI Update ACK ${transferId}] Status container (.flex-1.min-w-0) not found (non-image).`);
+                    }
                 }
             } else {
                 console.warn(`[UI Update ACK ${transferId}] Could not find .file-content within message element.`);

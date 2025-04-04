@@ -5,6 +5,8 @@ import {
     initializeUI,
     cleanupObjectURLs,
     getAvatarColor,
+    addObjectURLToTrack,
+    untrackAndRevokeObjectURL,
     // No need to export add/remove/untrack object URL utils publicly
 } from './main.js';
 
@@ -54,6 +56,8 @@ export {
     initializeUI,
     cleanupObjectURLs,
     getAvatarColor,
+    addObjectURLToTrack,
+    untrackAndRevokeObjectURL,
 
     // Messages
     getSelectedPeerId,
