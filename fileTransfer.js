@@ -1,10 +1,12 @@
 // fileTransfer.js
-import * as dom from './dom.js';
+// import * as dom from './dom.js';
+// import * as storage from './storage.js';
 import * as state from './state.js';
+import * as ui from './ui/index.js';
 import { FILE_CHUNK_SIZE } from './constants.js';
-import * as ui from './ui.js';
 import { escapeHTML, formatBytes } from './utils.js';
-import * as connection from './connection.js';
+// import { getSelectedPeerId, updateFileMessageProgress } from './ui/index.js'; // Directly import needed functions if preferred
+import { updateFileMessageProgress } from './ui/index.js'; // Keep only used import
 
 // --- Sending Files ---
 
@@ -234,6 +236,9 @@ export function handleIncomingFileMeta(senderId, fileInfo) {
 
 // Modified to handle ArrayBuffer directly (assuming connection.js gives ArrayBuffer for binary)
 export function handleIncomingDataChunk(peerId, arrayBuffer) {
+    let transferComplete = false; // Flag to indicate completion
+    let downloadUrl = null;
+    let fileInfoForAck = null;
     try {
         const view = new Uint8Array(arrayBuffer);
         let separatorIndex = -1;
@@ -249,7 +254,7 @@ export function handleIncomingDataChunk(peerId, arrayBuffer) {
         if (separatorIndex === -1 || separatorIndex === 0) {
             console.error(`Received binary chunk from ${peerId} without valid transferId separator.`);
             // Optional: Send error back to peer? Might be complex.
-            return;
+            return { completed: false }; // Return status
         }
 
         const idBuffer = arrayBuffer.slice(0, separatorIndex);
@@ -262,7 +267,7 @@ export function handleIncomingDataChunk(peerId, arrayBuffer) {
         // Check if transfer exists and is associated with the correct peer
         if (!fileData || fileData.peerId !== peerId) {
             console.warn(`[${transferId}] Received chunk for unknown, completed, or incorrect peer transfer (Sender: ${peerId}, Expected: ${fileData?.peerId}).`);
-            return;
+            return { completed: false }; // Return status
         }
 
         // Check connection state with the sender
@@ -279,7 +284,7 @@ export function handleIncomingDataChunk(peerId, arrayBuffer) {
                     ui.updateFileMessageProgress(peerId, transferId, -1);
                  }
              }
-             return;
+             return { completed: false }; // Return status
         }
 
         fileData.chunks.push(chunkData);
@@ -298,11 +303,18 @@ export function handleIncomingDataChunk(peerId, arrayBuffer) {
                 ui.addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 接收数据超出预期，已中止。`, peerId, true);
                 ui.updateFileMessageProgress(peerId, transferId, -1); // Mark as failed
             } else {
-                // Transfer complete, assemble the file
                 console.log(`[${transferId}] File received completely. Assembling...`);
-                assembleFile(transferId, fileData);
+                const assemblyResult = assembleFile(transferId, fileData);
+                if (assemblyResult) {
+                    transferComplete = true;
+                    downloadUrl = assemblyResult.downloadUrl; // Get URL from result
+                    fileInfoForAck = fileData.info; // Store info needed for ACK
+                    console.log(`[${transferId}] Assembly successful. downloadUrl: ${downloadUrl}`);
+                } else {
+                     // Assembly failed, assembleFile handles UI update to failed
+                }
             }
-             // Clean up state after completion or failure
+             // Clean up state regardless of assembly success/failure
              delete currentIncomingFiles[transferId];
              state.setIncomingFiles({...currentIncomingFiles});
              console.log(`[${transferId}] Cleaned up incoming file data from state.`);
@@ -315,13 +327,16 @@ export function handleIncomingDataChunk(peerId, arrayBuffer) {
         // const transferId = findTransferIdOnError(arrayBuffer); // Need a way to get ID if error happens early
         // if (transferId && state.incomingFiles[transferId]) { ... cleanup ... }
     }
+    // Return completion status and URL if successful
+    return { completed: transferComplete, downloadUrl: downloadUrl, fileInfo: fileInfoForAck };
 }
 
 // No longer need handleIncomingFileEnd if completion is based on size
 
 // --- File Assembly ---
+// Now returns an object { downloadUrl: string } on success, or null on failure
 function assembleFile(transferId, fileData) {
-    const peerId = fileData.peerId; // Get the sender's ID
+    const peerId = fileData.peerId;
     try {
         console.log(`[${transferId}] Assembling Blob. Type: ${fileData.info.type}, Chunks: ${fileData.chunks.length}`);
         const fileBlob = new Blob(fileData.chunks, { type: fileData.info.type || 'application/octet-stream' });
@@ -329,25 +344,18 @@ function assembleFile(transferId, fileData) {
         if (fileBlob.size !== fileData.info.size) {
              console.error(`[${transferId}] Assembled Blob size mismatch! Expected ${fileData.info.size}, got ${fileBlob.size}.`);
              ui.addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 组装后大小不匹配。`, peerId, true);
-             ui.updateFileMessageProgress(peerId, transferId, -1); // Mark as failed
-             return; // Stop assembly
+             ui.updateFileMessageProgress(peerId, transferId, -1);
+             return null; // Indicate failure
         }
 
         const downloadUrl = URL.createObjectURL(fileBlob);
         console.log(`[${transferId}] File assembled. Download URL created: ${downloadUrl}`);
+        ui.updateFileMessageProgress(peerId, transferId, 1, downloadUrl); // Update UI here
 
-        // Update the UI to show completion and download link
-        ui.updateFileMessageProgress(peerId, transferId, 1, downloadUrl);
-
-        // --- NEW: Send acknowledgement back to the sender ---
-        console.log(`[${transferId}] Sending file acknowledgement back to sender ${peerId}.`);
-        connection.sendFileAck(peerId, transferId);
-        // --- END NEW ---
-
-        // Show system message only if the sender is the active chat
         if (peerId === state.getActiveChatPeerId()) {
             ui.addSystemMessage(`文件 ${escapeHTML(fileData.info.name)} 接收完成。`, peerId);
         }
+        return { downloadUrl: downloadUrl }; // Indicate success and return URL
 
     } catch (error) {
         console.error(`[${transferId}] Error creating Blob or Object URL:`, error);

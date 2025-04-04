@@ -62,7 +62,10 @@ export const localUserId = initialProfile.userId; // Unique ID for this client (
 export let localUserNickname = initialProfile.nickname; // User's chosen nickname (mutable)
 export let localUserAvatar = initialProfile.avatar; // User's chosen avatar (mutable)
 export let localKeyPair = null; // Cryptographic key pair for this client
-export let contacts = {}; // { peerId: { id: string, name: string, online: boolean | 'connecting' } }
+// --- MODIFIED contacts structure ---
+// { peerId: { id: string, name: string, online: boolean | 'connecting', avatar: string, friendStatus: 'confirmed' | 'pending_outgoing' | 'pending_incoming' | 'removed_by_peer' } }
+export let contacts = {};
+// --- END MODIFICATION ---
 export let activeChatPeerId = null; // Which peer's chat window is currently active
 
 // --- Per-Peer State (Managed via Dictionaries/Maps) ---
@@ -109,6 +112,11 @@ export function setIncomingFiles(files) { incomingFiles = files; } // Keep for n
 export function addPendingOutgoingRequest(peerId) {
     pendingOutgoingRequests.add(peerId);
     savePendingRequests(); // Optional: Persist
+    // --- NEW: Update contact status if exists ---
+    if (contacts[peerId]) {
+        setContactFriendStatus(peerId, 'pending_outgoing');
+    }
+    // --- END NEW ---
     console.log(`Added pending outgoing request for: ${peerId}`);
 }
 
@@ -116,6 +124,11 @@ export function removePendingOutgoingRequest(peerId) {
     const deleted = pendingOutgoingRequests.delete(peerId);
     if (deleted) {
         savePendingRequests(); // Optional: Persist
+        // --- NEW: Update contact status if exists (e.g., cancelled/declined) ---
+        if (contacts[peerId]) {
+            setContactFriendStatus(peerId, 'removed_by_peer');
+        }
+        // --- END NEW ---
         console.log(`Removed pending outgoing request for: ${peerId}`);
     }
     return deleted;
@@ -128,9 +141,15 @@ export function hasPendingOutgoingRequest(peerId) {
 // Store incoming request details
 export function addPendingIncomingRequest(request) { // request: { id: string, name?: string, timestamp: number }
     if (!request || !request.id) return false;
-    pendingIncomingRequests.set(request.id, request);
+    const peerId = request.id;
+    pendingIncomingRequests.set(peerId, request);
     savePendingRequests(); // Optional: Persist
-    console.log(`Added pending incoming request from: ${request.id}`);
+    // --- NEW: Update contact status if exists ---
+    if (contacts[peerId]) {
+        setContactFriendStatus(peerId, 'pending_incoming');
+    }
+    // --- END NEW ---
+    console.log(`Added pending incoming request from: ${peerId}`);
     return true;
 }
 
@@ -138,6 +157,7 @@ export function removePendingIncomingRequest(peerId) {
     const deleted = pendingIncomingRequests.delete(peerId);
     if (deleted) {
         savePendingRequests(); // Optional: Persist
+        // --- REMOVED: Status update logic moved to UI handlers --- //
         console.log(`Removed pending incoming request from: ${peerId}`);
     }
     return deleted;
@@ -325,7 +345,9 @@ export function loadContacts() {
                         id: contact.id,
                         name: contact.name || contact.id, // Default name to ID
                         online: false, // ALWAYS initialize as offline on load
-                        avatar: contact.avatar || 'default_avatar.png' // Use provided avatar or default
+                        avatar: contact.avatar || 'default_avatar.png', // Use provided avatar or default
+                        // --- ADDED: Load friendStatus, default to 'confirmed' --- //
+                        friendStatus: contact.friendStatus || 'confirmed' // Default existing contacts to confirmed
                     };
                 }
             });
@@ -343,19 +365,25 @@ export function loadContacts() {
 
 export function saveContacts() {
     try {
-        // Save ID, name, and NOW avatar
+        // Save ID, name, avatar, and friendStatus
         const contactsToSave = {};
         Object.values(contacts).forEach(contact => {
-            contactsToSave[contact.id] = { id: contact.id, name: contact.name, avatar: contact.avatar }; // Include avatar
+            contactsToSave[contact.id] = {
+                id: contact.id,
+                name: contact.name,
+                avatar: contact.avatar,
+                friendStatus: contact.friendStatus // Include friendStatus
+            };
         });
         localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contactsToSave));
-        console.log("Saved contacts (ID, name, avatar) to localStorage:", contactsToSave);
+        console.log("Saved contacts (ID, name, avatar, friendStatus) to localStorage:", contactsToSave);
     } catch (e) {
         console.error("Failed to save contacts to localStorage:", e);
     }
 }
 
 // --- NEW: Function to update details for an existing contact --- //
+// Note: This function intentionally does NOT modify friendStatus
 export function updateContactDetails(peerId, details) { // details: { nickname?: string, avatar?: string }
     console.log(`[State updateContactDetails] Called for peer: ${peerId} with details:`, details); // <-- ADD LOG
 
@@ -395,9 +423,8 @@ export function updateContactDetails(peerId, details) { // details: { nickname?:
 }
 // --- END NEW --- //
 
-// Modified addContact: Now potentially called when accepting a request
-// Need to ensure we don't re-add if already exists
-export function addContact(peerId, name = null) {
+// Modified addContact: Accepts optional initial friendStatus
+export function addContact(peerId, name = null, initialFriendStatus = 'confirmed') {
     if (!peerId || typeof peerId !== 'string' || peerId.trim() === '') {
         console.warn("Attempted to add invalid peer ID:", peerId);
         return false;
@@ -413,14 +440,14 @@ export function addContact(peerId, name = null) {
 
     if (existingContact) {
         console.log(`Contact ${trimmedId} already exists.`);
-        // Update name if a new one is provided and different
+        // Only update name if different, DO NOT change friendStatus here
         if (existingContact.name !== nameToUse) {
              existingContact.name = nameToUse;
              saveContacts();
-             console.log(`Updated name for contact ${trimmedId} to ${nameToUse}`);
-             // TODO: Need UI update for name change
-             // ui.updateContactName(trimmedId, name); // Needs implementation in ui.js
+             console.log(`Updated name for existing contact ${trimmedId} to ${nameToUse}`);
+             // UI update should happen elsewhere
         }
+        // Optionally update avatar too if a new one is implied?
         return true; // Indicate contact exists or was updated
     }
 
@@ -429,14 +456,14 @@ export function addContact(peerId, name = null) {
         id: trimmedId,
         name: nameToUse,
         online: false, // Initialize as offline, status updated by connection logic
-        avatar: 'default_avatar.png' // Use default avatar
+        avatar: 'default_avatar.png', // Use default avatar
+        friendStatus: initialFriendStatus // Use provided initial status
     };
     const updatedContacts = { ...contacts, [trimmedId]: newContact };
     setContacts(updatedContacts);
     saveContacts();
-    console.log(`Added new contact: ${trimmedId}`);
-    // TODO: Need UI update to add contact to list
-    // ui.addContactToList(newContact); // Needs implementation in ui.js
+    console.log(`Added new contact: ${trimmedId} with friendStatus: ${initialFriendStatus}`);
+    // UI update should happen elsewhere
     return true; // Indicate new contact was added
 }
 
@@ -603,58 +630,6 @@ export function resetAllConnections() {
 }
 
 
-// REMOVE OLD Single-Connection state variables and reset function
-/*
-export let peerConnection = null;
-export let dataChannel = null;
-export let remoteUserId = null;
-export let isConnected = false;
-export let isConnecting = false;
-export let sharedKey = null;
-export let peerPublicKey = null;
-export let peerIsTyping = false; // Track if *remote* user is typing
-
-export function setPeerConnection(newPc) { peerConnection = newPc; }
-export function setDataChannel(newDc) { dataChannel = newDc; }
-export function setRemoteUserId(newId) { remoteUserId = newId; }
-export function setIsConnected(status) { isConnected = status; }
-export function setIsConnecting(status) { isConnecting = status; }
-export function setSharedKey(key) { sharedKey = key; }
-export function setPeerPublicKey(key) { peerPublicKey = key; }
-export function setPeerIsTyping(status) { peerIsTyping = status; }
-
-// OLD reset function - replaced by resetPeerState(peerId) and resetAllConnections()
-export function resetConnectionState() {
-    if (dataChannel) {
-        try { dataChannel.close(); } catch (e) { console.warn("Error closing data channel:", e); }
-    }
-    if (peerConnection) {
-        try { peerConnection.close(); } catch (e) { console.warn("Error closing peer connection:", e); }
-    }
-    let previousRemoteUserId = remoteUserId;
-    setDataChannel(null);
-    setPeerConnection(null);
-    setRemoteUserId(null);
-    setIsConnected(false);
-    setIsConnecting(false);
-    setSharedKey(null);
-    setPeerPublicKey(null);
-    clearTimeout(typingTimeout); // Keep local typing timeout clear logic maybe? -> No, handled globally
-    // setTypingTimeout(null); // Handled globally
-    // setIsTyping(false); // Handled globally
-    setPeerIsTyping(false); // Remove this
-    setIncomingFiles({});
-
-    // Update the status of the previously connected peer to offline
-    if (previousRemoteUserId) {
-        updateContactStatus(previousRemoteUserId, false);
-        // Note: UI update for this status change should be triggered separately if needed
-    }
-
-    return previousRemoteUserId; // No longer needed
-}
-*/
-
 // NEW: Check WebSocket connection status
 export function isSignalingConnected() {
     return ws && ws.readyState === WebSocket.OPEN;
@@ -688,4 +663,20 @@ export function setLocalAvatar(newAvatar) {
             console.error('Failed to save avatar to localStorage:', e);
         }
     }
-} 
+}
+
+// --- NEW: Function to explicitly set friend status --- //
+export function setContactFriendStatus(peerId, status) {
+    if (contacts[peerId]) {
+        if (contacts[peerId].friendStatus !== status) {
+            contacts[peerId].friendStatus = status;
+            console.log(`[State] Set friendStatus for ${peerId} to ${status}`);
+            saveContacts(); // Save the change
+            return true;
+        }
+    } else {
+        console.warn(`[State] Cannot set friendStatus for non-existent contact: ${peerId}`);
+    }
+    return false;
+}
+// --- END NEW --- // 

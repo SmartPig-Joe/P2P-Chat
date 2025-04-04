@@ -1,13 +1,14 @@
 // connection.js
 import * as state from './state.js';
 import { SIGNALING_SERVER_URL, PEER_CONNECTION_CONFIG } from './constants.js';
-import * as ui from './ui.js';
+import * as ui from './ui/index.js';
 import * as crypto from './crypto.js';
 import * as fileTransfer from './fileTransfer.js';
-import * as dom from './dom.js'; // Needed for updating UI elements based on WS state
+// import * as dom from './dom.js'; // Needed for updating UI elements based on WS state
 import * as storage from './storage.js'; // Import storage module
 import { resetAllConnections } from './state.js'; // Import resetAllConnections
-import { formatBytes } from './utils.js'; // Import formatBytes from utils
+// import { formatBytes } from './utils.js'; // Import formatBytes from utils
+import { deriveSharedKey } from './crypto.js';
 
 // --- WebSocket Logic ---
 
@@ -126,6 +127,24 @@ function handleWebSocketMessage(event) {
     }
 }
 
+// --- NEW: Handle WebSocket disconnection logic ---
+function handleWebSocketDisconnection(reason) {
+    console.log(`WebSocket disconnected. Reason: ${reason}. Resetting all connections.`);
+    // Display message only if not already disconnected
+    if (state.ws !== null) { // Check if ws was previously set
+        ui.addSystemMessage(`与信令服务器的连接已断开 (${reason})。`, null, true);
+    }
+    state.setWs(null);
+    state.resetAllConnections(); // Reset state first
+    // Update UI for all contacts AFTER state is reset
+    Object.keys(state.contacts).forEach(peerId => {
+         // updateContactStatusUI should reflect the new offline state set by resetAllConnections
+         ui.updateContactStatusUI(peerId, false); // Explicitly set UI to offline
+    });
+    ui.updateChatInputVisibility(); // Update input visibility based on potentially cleared active chat
+}
+// --- END NEW ---
+
 export function connectWebSocket() {
     if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
         console.log("WebSocket is already open or connecting.");
@@ -150,30 +169,33 @@ export function connectWebSocket() {
 
     newWs.onerror = (error) => {
         console.error("WebSocket error:", error);
-        ui.addSystemMessage("无法连接到信令服务器，请检查服务器状态和网络连接。", true);
-        state.setWs(null);
-        state.resetAllConnections();
-        Object.keys(state.contacts).forEach(peerId => {
-             state.updateContactStatus(peerId, false);
-             ui.updateContactStatusUI(peerId, false);
-        });
-         ui.updateChatInputVisibility();
+        // ui.addSystemMessage("无法连接到信令服务器，请检查服务器状态和网络连接。", true); // Moved message to handler
+        // state.setWs(null);
+        // state.resetAllConnections();
+        // Object.keys(state.contacts).forEach(peerId => {
+        //      state.updateContactStatus(peerId, false);
+        //      ui.updateContactStatusUI(peerId, false);
+        // });
+        //  ui.updateChatInputVisibility();
+        handleWebSocketDisconnection("错误");
     };
 
     newWs.onclose = (event) => {
         console.log(`WebSocket connection closed: Code=${event.code}, Reason='${event.reason}'`);
-        if (!event.wasClean && !state.isConnected) {
-             ui.addSystemMessage("与信令服务器的连接意外断开。", true);
-        } else if (!state.isConnected) {
-        }
+        // if (!event.wasClean && !state.isConnected) {
+        //      ui.addSystemMessage("与信令服务器的连接意外断开。", true);
+        // } else if (!state.isConnected) {
+        // }
 
-        state.setWs(null);
-        state.resetAllConnections();
-         Object.keys(state.contacts).forEach(peerId => {
-             state.updateContactStatus(peerId, false);
-             ui.updateContactStatusUI(peerId, false);
-        });
-        ui.updateChatInputVisibility();
+        // state.setWs(null);
+        // state.resetAllConnections();
+        //  Object.keys(state.contacts).forEach(peerId => {
+        //      state.updateContactStatus(peerId, false);
+        //      ui.updateContactStatusUI(peerId, false);
+        // });
+        // ui.updateChatInputVisibility();
+        const reason = event.wasClean ? "正常关闭" : "意外断开";
+        handleWebSocketDisconnection(reason);
     };
 }
 
@@ -216,6 +238,39 @@ function setupPeerConnectionEvents(peerId, pc) {
         }
     };
 
+    // --- NEW: Handle PeerConnection failure/closure ---
+    function handlePeerConnectionFailure(peerId, stateType, newState) {
+        console.log(`[PC Failure Handler] Peer: ${peerId}, State Type: ${stateType}, New State: ${newState}`);
+        // Avoid redundant resets if already handled
+        if (state.getConnectionState(peerId) === 'closed' || state.getConnectionState(peerId) === 'failed') {
+            console.log(`[PC Failure Handler] Ignoring ${newState} for ${peerId}, already closed/failed.`);
+            return;
+        }
+
+        let message = `与 ${state.contacts[peerId]?.name || peerId} 的连接`;
+        let isError = false;
+
+        if (newState === 'failed') {
+            message += ` 失败 (${stateType})。`;
+            isError = true;
+        } else if (newState === 'disconnected') {
+            message += ` 中断 (${stateType})。可能尝试重连...`;
+            // isError = false; // Not strictly an error, but signifies disruption
+        } else if (newState === 'closed') {
+            message += ` 已关闭 (${stateType})。`;
+            // isError = false;
+        }
+
+        ui.addSystemMessage(message, peerId, isError);
+        console.log(`[RESET CALL] Triggered by: ${stateType} state '${newState}' for ${peerId}`);
+        // resetPeerConnection will call state.resetPeerState and update UI status
+        resetPeerConnection(peerId, `${stateType} state ${newState}`);
+        // Explicitly ensure UI is offline, resetPeerConnection might be asynchronous or UI update delayed?
+        // state.updateContactStatus(peerId, false); // Let resetPeerConnection handle state update
+        // ui.updateContactStatusUI(peerId, false); // Let resetPeerConnection handle UI update
+    }
+    // --- END NEW ---
+
     pc.oniceconnectionstatechange = () => {
         if (!pc) return;
         const currentState = pc.iceConnectionState;
@@ -232,28 +287,31 @@ function setupPeerConnectionEvents(peerId, pc) {
                 console.log(`ICE connection completed for ${peerId}.`);
                 break;
             case 'failed':
-                console.error(`ICE connection failed for ${peerId}.`);
-                ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接失败 (ICE)。`, peerId, true);
-                console.log(`[RESET CALL] Triggered by: oniceconnectionstatechange 'failed' for ${peerId}`);
-                resetPeerConnection(peerId);
-                 state.updateContactStatus(peerId, false);
-                 ui.updateContactStatusUI(peerId, false);
-                break;
             case 'disconnected':
-                console.log(`ICE connection disconnected for ${peerId}. May reconnect...`);
-                ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接中断 (ICE)。可能尝试重连...`, peerId);
-                state.updateContactStatus(peerId, false);
-                ui.updateContactStatusUI(peerId, false);
-                break;
             case 'closed':
-                console.log(`ICE connection closed for ${peerId}.`);
-                if (state.getConnectionState(peerId) !== 'closed' && state.getConnectionState(peerId) !== 'failed') {
-                    console.log(`[RESET CALL] Triggered by: oniceconnectionstatechange 'closed' for ${peerId}`);
-                    resetPeerConnection(peerId);
-                }
-                 state.updateContactStatus(peerId, false);
-                 ui.updateContactStatusUI(peerId, false);
+                handlePeerConnectionFailure(peerId, 'ICE', currentState);
+                // console.error(`ICE connection failed for ${peerId}.`);
+                // ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接失败 (ICE)。`, peerId, true);
+                // console.log(`[RESET CALL] Triggered by: oniceconnectionstatechange 'failed' for ${peerId}`);
+                // resetPeerConnection(peerId);
+                //  state.updateContactStatus(peerId, false);
+                //  ui.updateContactStatusUI(peerId, false);
                 break;
+            // case 'disconnected':
+            //     console.log(`ICE connection disconnected for ${peerId}. May reconnect...`);
+            //     ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接中断 (ICE)。可能尝试重连...`, peerId);
+            //     state.updateContactStatus(peerId, false);
+            //     ui.updateContactStatusUI(peerId, false);
+            //     break;
+            // case 'closed':
+            //     console.log(`ICE connection closed for ${peerId}.`);
+            //     if (state.getConnectionState(peerId) !== 'closed' && state.getConnectionState(peerId) !== 'failed') {
+            //         console.log(`[RESET CALL] Triggered by: oniceconnectionstatechange 'closed' for ${peerId}`);
+            //         resetPeerConnection(peerId);
+            //     }
+            //      state.updateContactStatus(peerId, false);
+            //      ui.updateContactStatusUI(peerId, false);
+            //     break;
         }
     };
 
@@ -280,30 +338,33 @@ function setupPeerConnectionEvents(peerId, pc) {
 
                 break;
             case 'failed':
-                console.error(`Overall connection failed for ${peerId}.`);
-                 ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接失败。`, peerId, true);
-                console.log(`[RESET CALL] Triggered by: onconnectionstatechange 'failed' for ${peerId}`);
-                resetPeerConnection(peerId);
-                 state.updateContactStatus(peerId, false);
-                 ui.updateContactStatusUI(peerId, false);
-                break;
             case 'disconnected':
-                 console.log(`Overall connection disconnected for ${peerId}.`);
-                ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接中断。`, peerId);
-                console.log(`[RESET CALL] Triggered by: onconnectionstatechange 'disconnected' for ${peerId}`);
-                resetPeerConnection(peerId);
-                 state.updateContactStatus(peerId, false);
-                 ui.updateContactStatusUI(peerId, false);
-                break;
             case 'closed':
-                 console.log(`Overall connection closed for ${peerId}.`);
-                if (state.getConnectionState(peerId) !== 'closed') {
-                    console.log(`[RESET CALL] Triggered by: onconnectionstatechange 'closed' for ${peerId}`);
-                    resetPeerConnection(peerId);
-                }
-                 state.updateContactStatus(peerId, false);
-                 ui.updateContactStatusUI(peerId, false);
-                break;
+                 handlePeerConnectionFailure(peerId, 'Overall', overallState);
+                // console.error(`Overall connection failed for ${peerId}.`);
+                //  ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接失败。`, peerId, true);
+                // console.log(`[RESET CALL] Triggered by: onconnectionstatechange 'failed' for ${peerId}`);
+                // resetPeerConnection(peerId);
+                //  state.updateContactStatus(peerId, false);
+                //  ui.updateContactStatusUI(peerId, false);
+                // break;
+            // case 'disconnected':
+            //      console.log(`Overall connection disconnected for ${peerId}.`);
+            //     ui.addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的连接中断。`, peerId);
+            //     console.log(`[RESET CALL] Triggered by: onconnectionstatechange 'disconnected' for ${peerId}`);
+            //     resetPeerConnection(peerId);
+            //      state.updateContactStatus(peerId, false);
+            //      ui.updateContactStatusUI(peerId, false);
+            //     break;
+            // case 'closed':
+            //      console.log(`Overall connection closed for ${peerId}.`);
+            //     if (state.getConnectionState(peerId) !== 'closed') {
+            //         console.log(`[RESET CALL] Triggered by: onconnectionstatechange 'closed' for ${peerId}`);
+            //         resetPeerConnection(peerId);
+            //     }
+            //      state.updateContactStatus(peerId, false);
+            //      ui.updateContactStatusUI(peerId, false);
+            //     break;
         }
     };
 
@@ -432,309 +493,362 @@ async function setupDataChannelEvents(peerId, dc) {
     };
 
     dc.onmessage = async (event) => {
-        console.log(`Raw message received from ${peerId} on channel ${dc.label}`);
-        try {
-            let parsedMessage;
-            let messageType = 'unknown';
-            let payload = {};
-            let originalSenderId = peerId; // Keep track of the original sender
+        // Check if data is ArrayBuffer (binary)
+        if (event.data instanceof ArrayBuffer) {
+            console.log(`[${peerId}] Received binary data (chunk). Length: ${event.data.byteLength}`);
+            // Process the chunk using fileTransfer module
+            const result = fileTransfer.handleIncomingDataChunk(peerId, event.data);
 
-            // Handle binary data first (file chunks)
-            if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
-                console.log(`Received binary data chunk from ${peerId} (${event.data.byteLength} bytes)`);
-                // File chunks are NOT encrypted in this implementation
-                fileTransfer.handleIncomingDataChunk(peerId, event.data);
-                return; // Stop processing here for file chunks
-            }
+            // Check if the file transfer is complete based on the return value
+            if (result?.completed && result.fileInfo) {
+                console.log(`[${peerId}] File transfer ${result.fileInfo.id} completed. Sending ACK.`);
+                sendFileAck(peerId, result.fileInfo.id);
+            } else if (result === null) {
+                console.error(`[${peerId}] handleIncomingDataChunk returned null, indicating an error during processing.`);
+                // Optionally add system message or specific error handling
+            } // No else needed if result.completed is false, just means more chunks are expected
 
-            // Process string data
-            if (typeof event.data === 'string') {
-                try {
-                    parsedMessage = JSON.parse(event.data);
+        } else if (typeof event.data === 'string') {
+            console.log(`Raw message received from ${peerId} on channel ${dc.label}`);
+            try {
+                let parsedMessage;
+                let messageType = 'unknown';
+                let payload = {};
+                let originalSenderId = peerId; // Keep track of the original sender
 
-                    // --- DECRYPTION --- 
-                    if (parsedMessage && parsedMessage.type === 'encrypted') {
-                        console.log(`Received encrypted message wrapper from ${peerId}`);
-                        const keys = state.getPeerKeys(peerId);
-                        if (keys && keys.sharedKey) {
-                            try {
-                                const decryptedJsonString = await crypto.decryptMessage(peerId, parsedMessage.payload);
-                                // Re-parse the decrypted JSON string
-                                parsedMessage = JSON.parse(decryptedJsonString);
-                                console.log(`Decrypted message. Original type: ${parsedMessage?.type}`);
-                            } catch (decryptionError) {
-                                console.error(`Failed to decrypt message from ${peerId}:`, decryptionError);
-                                ui.addSystemMessage(`无法解密来自 ${state.contacts[peerId]?.name || peerId} 的消息。`, peerId, true);
-                                // Should we return or try to process as plaintext? Return seems safer.
-                                return;
+                // Process string data
+                if (typeof event.data === 'string') {
+                    try {
+                        parsedMessage = JSON.parse(event.data);
+
+                        // --- DECRYPTION --- 
+                        if (parsedMessage && parsedMessage.type === 'encrypted') {
+                            console.log(`Received encrypted message wrapper from ${peerId}`);
+                            const keys = state.getPeerKeys(peerId);
+                            if (keys && keys.sharedKey) {
+                                try {
+                                    const decryptedJsonString = await crypto.decryptMessage(peerId, parsedMessage.payload);
+                                    // Re-parse the decrypted JSON string
+                                    parsedMessage = JSON.parse(decryptedJsonString);
+                                    console.log(`Decrypted message. Original type: ${parsedMessage?.type}`);
+                                } catch (decryptionError) {
+                                    console.error(`Failed to decrypt message from ${peerId}:`, decryptionError);
+                                    ui.addSystemMessage(`无法解密来自 ${state.contacts[peerId]?.name || peerId} 的消息。`, peerId, true);
+                                    // Should we return or try to process as plaintext? Return seems safer.
+                                    return;
+                                }
+                            } else {
+                                 console.warn(`Received encrypted message from ${peerId}, but no shared key available. Ignoring.`);
+                                 ui.addSystemMessage(`收到来自 ${state.contacts[peerId]?.name || peerId} 的加密消息，但无法解密（无密钥）。`, peerId, true);
+                                 return;
                             }
+                        }
+                        // --- END DECRYPTION ---
+
+                        // Now process the potentially decrypted parsedMessage
+                        if (parsedMessage && typeof parsedMessage === 'object' && parsedMessage.type) {
+                            messageType = parsedMessage.type;
+                            payload = parsedMessage.payload || {};
+                            // Log the type AFTER potential decryption
+                            console.log(`Processing structured message of type: ${messageType} from ${peerId}`);
                         } else {
-                             console.warn(`Received encrypted message from ${peerId}, but no shared key available. Ignoring.`);
-                             ui.addSystemMessage(`收到来自 ${state.contacts[peerId]?.name || peerId} 的加密消息，但无法解密（无密钥）。`, peerId, true);
+                            // Treat as plain text if JSON parsing doesn't yield a type, or if original wasn't JSON
+                            // This should be less common now with encryption wrapper
+                            messageType = 'text';
+                            payload = { text: (typeof parsedMessage === 'string' ? parsedMessage : event.data) }; // Use original data if parsing failed
+                            console.log(`Received plain text string or non-standard JSON from ${peerId}, wrapping.`);
+                        }
+                    } catch (e) {
+                        // If JSON parsing fails initially (and it wasn't an encrypted wrapper)
+                        messageType = 'text';
+                        payload = { text: event.data };
+                        console.log(`Received non-JSON string from ${peerId}, wrapping.`);
+                    }
+                } else {
+                    console.warn(`Received message of unknown type from ${peerId}:`, typeof event.data);
+                    return; // Ignore unknown types
+                }
+
+                // --- Process based on messageType --- //
+                switch (messageType) {
+                    case 'text':
+                         // --- NEW: Check if sender is a contact --- 
+                         if (!state.contacts[originalSenderId]) {
+                             console.warn(`Received text message from non-contact ${originalSenderId}. Ignoring and sending error.`);
+                             sendNotFriendError(originalSenderId); // Send feedback
+                             return; // Stop processing
+                         }
+                         // --- END NEW ---
+
+                         // Decryption already happened if it was encrypted
+                        const messageToStore = {
+                            id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                            senderId: originalSenderId, // Use originalSenderId here
+                            peerId: originalSenderId, // Use originalSenderId here
+                            type: 'text',
+                            payload: { text: payload.text }, // Ensure payload structure is consistent
+                            timestamp: payload.timestamp || Date.now() // Timestamp might be from encrypted payload
+                        };
+                        await storage.addMessage(messageToStore);
+                        console.log(`Stored text message from ${originalSenderId}:`, messageToStore);
+                        if (state.isActiveChat(originalSenderId)) {
+                            ui.displayMessage(originalSenderId, messageToStore);
+                        } else {
+                            ui.showUnreadIndicator(originalSenderId, true);
+                        }
+                        break;
+
+                    // Other cases (fileMeta, typing, publicKey, friend_request, etc.)
+                    // These are generally expected to be sent *before* shared key is established
+                    // or are metadata that might not need encryption (like typing).
+                    // publicKey MUST NOT be encrypted.
+                    // For now, assume others are plaintext.
+
+                    case 'fileMeta':
+                         // --- NEW: Check if sender is a contact --- 
+                         if (!state.contacts[originalSenderId]) {
+                             console.warn(`Received fileMeta from non-contact ${originalSenderId}. Ignoring and sending error.`);
+                             sendNotFriendError(originalSenderId); // Send feedback
+                             return; // Stop processing
+                         }
+                         // --- END NEW ---
+
+                        // Should fileMeta be encrypted? For now, assuming no.
+                        const fileInfo = payload;
+                        const messageForUi = {
+                            id: fileInfo.transferId || `file-${Date.now()}`,
+                            senderId: originalSenderId,
+                            peerId: originalSenderId,
+                            type: 'fileMeta',
+                            payload: fileInfo,
+                            timestamp: payload.timestamp || fileInfo.timestamp || Date.now()
+                        };
+                        await storage.addMessage(messageForUi);
+                        ui.displayMessage(originalSenderId, messageForUi);
+                        ui.showUnreadIndicator(originalSenderId, true);
+                        fileTransfer.handleIncomingFileMeta(originalSenderId, fileInfo);
+                        break;
+
+                    case 'typing':
+                        // Typing indicators are low-value, maybe don't encrypt?
+                        console.log(`Received typing indicator from ${originalSenderId}:`, payload.isTyping);
+                        ui.showTypingIndicator(originalSenderId, payload.isTyping);
+                        break;
+
+                    case 'publicKey':
+                        // Public key MUST be received in plaintext
+                        if (payload.jwk) {
+                            console.log(`Received public key from ${originalSenderId}`);
+                            await crypto.handlePublicKey(originalSenderId, payload.jwk);
+                        } else {
+                            console.warn(`Received invalid publicKey message from ${originalSenderId}: Missing jwk in payload.`);
+                        }
+                        break;
+
+                    // Friend requests and responses - assumed plaintext for now
+                    case 'friend_request':
+                        console.log(`[Friend Request] Received friend_request from ${originalSenderId}:`, payload);
+                        // Validate payload basics
+                        if (!payload.senderId || payload.senderId !== originalSenderId) {
+                            console.warn(`[Friend Request] Invalid senderId in request from ${originalSenderId}. Ignoring.`);
+                            return;
+                        }
+                        // Check if we already sent a request to them
+                        if (state.hasPendingOutgoingRequest(originalSenderId)) {
+                            console.log(`[Friend Request] Received request from ${originalSenderId}, to whom we already sent a request. Auto-accepting?`);
+                        }
+
+                        // Store incoming request state
+                        const requestData = {
+                            id: originalSenderId,
+                            name: payload.senderName || originalSenderId,
+                            timestamp: payload.timestamp || Date.now()
+                        };
+                        state.addPendingIncomingRequest(requestData);
+
+                        // --- NEW: Add contact to main state with pending status ---
+                        state.addContact(originalSenderId, requestData.name, 'pending_incoming');
+                        // --- END NEW ---
+
+                        // Notify UI
+                        ui.renderContactList(); // Re-render to potentially show incoming request indicator
+                        ui.addSystemMessage(`${requestData.name} 请求添加您为好友。`, null); // Global notification for now
+                        break;
+
+                    case 'friend_accept':
+                        console.log(`[Friend Request] Received friend_accept from ${originalSenderId}:`, payload);
+                        // Validate payload
+                        if (!payload.acceptorId || payload.acceptorId !== originalSenderId) {
+                            console.warn(`[Friend Request] Invalid acceptorId in accept message from ${originalSenderId}. Ignoring.`);
+                            return;
+                        }
+                        // Check if we actually sent a request
+                        if (!state.hasPendingOutgoingRequest(originalSenderId)) {
+                            console.warn(`[Friend Request] Received unexpected accept from ${originalSenderId}. Ignoring.`);
+                            return;
+                        }
+                        // Process acceptance
+                        state.removePendingOutgoingRequest(originalSenderId);
+                        const acceptorName = payload.acceptorName || originalSenderId;
+                        // state.addContact(originalSenderId, acceptorName); // Add as contact // <-- REMOVE or COMMENT OUT this line
+
+                        // --- NEW: Explicitly set friend status to confirmed ---
+                        state.setContactFriendStatus(originalSenderId, 'confirmed');
+                        // Optionally update name if different (addContact logic moved here if needed)
+                        if (state.contacts[originalSenderId] && state.contacts[originalSenderId].name !== acceptorName) {
+                            state.contacts[originalSenderId].name = acceptorName;
+                            state.saveContacts(); // Make sure to save if name is updated
+                            console.log(`[Friend Accept] Updated name for ${originalSenderId} to ${acceptorName}`);
+                        }
+                        // --- END NEW ---
+
+                        // Update UI
+                        ui.renderContactList(); // Re-render to show as full contact
+                        ui.addSystemMessage(`${acceptorName} 已接受您的好友请求。`, null);
+
+                        // --- MODIFIED: Explicitly update UI status and switch chat ---
+                        ui.updateContactStatusUI(originalSenderId, 'connecting'); // Assume connecting first
+                        // Don't switch chat automatically here, let user decide
+                        // await ui.switchToChat(originalSenderId); // Let user click if they want to chat now
+
+                        // Attempt connection after receiving acceptance
+                        connectToPeer(originalSenderId)
+                            .then(dc => {
+                                // Connection successful (or already existed), ensure UI is fully online
+                                console.log(`[Friend Accept] connectToPeer successful for ${originalSenderId}. Ensuring UI is online.`);
+                                ui.updateContactStatusUI(originalSenderId, true);
+                                if (state.isActiveChat(originalSenderId)) { // Update input only if active
+                                    ui.updateChatInputVisibility();
+                                }
+                            })
+                            .catch(err => {
+                                console.error(`[Friend Accept] connectToPeer failed for ${originalSenderId} after acceptance:`, err);
+                                // Show error and potentially mark offline
+                                ui.addSystemMessage(`尝试自动连接到 ${acceptorName} 失败: ${err.message}`, originalSenderId, true);
+                                ui.updateContactStatusUI(originalSenderId, false);
+                                if (state.isActiveChat(originalSenderId)) { // Update input only if active
+                                    ui.updateChatInputVisibility();
+                                }
+                            });
+                        // --- END MODIFICATION ---
+                        break;
+
+                    case 'friend_decline':
+                        console.log(`[Friend Request] Received friend_decline from ${originalSenderId}:`, payload);
+                         // Validate payload
+                        if (!payload.declinerId || payload.declinerId !== originalSenderId) {
+                            console.warn(`[Friend Request] Invalid declinerId in decline message from ${originalSenderId}. Ignoring.`);
+                            return;
+                        }
+                        // Check if we actually sent a request
+                        if (!state.hasPendingOutgoingRequest(originalSenderId)) {
+                            console.warn(`[Friend Request] Received unexpected decline from ${originalSenderId}. Ignoring.`);
+                            return;
+                        }
+                        // Process decline
+                        state.removePendingOutgoingRequest(originalSenderId);
+                        // --- NEW: Also remove the contact from the main contacts list ---
+                        state.removeContact(originalSenderId);
+                        // --- END NEW ---
+
+                        // Update UI
+                        ui.renderContactList(); // Re-render to remove pending state
+                        ui.addSystemMessage(`${state.contacts[originalSenderId]?.name || originalSenderId} 已拒绝您的好友请求。`, null);
+
+                        // Optional: Disconnect if still connected
+                        disconnectFromPeer(originalSenderId);
+                        break;
+
+                    // --- NEW: Handle Friend Request Cancellation ---
+                    case 'friend_cancel':
+                        console.log(`[Friend Request] Received friend_cancel from ${originalSenderId}:`, payload);
+                        // Validate payload
+                        if (!payload.cancellerId || payload.cancellerId !== originalSenderId) {
+                            console.warn(`[Friend Request] Invalid cancellerId in cancel message from ${originalSenderId}. Ignoring.`);
+                            return;
+                        }
+                        // Check if we have a pending incoming request from this user
+                        if (!state.hasPendingIncomingRequest(originalSenderId)) {
+                             console.warn(`[Friend Request] Received unexpected cancel from ${originalSenderId} (no pending incoming request found). Ignoring.`);
                              return;
                         }
-                    }
-                    // --- END DECRYPTION ---
 
-                    // Now process the potentially decrypted parsedMessage
-                    if (parsedMessage && typeof parsedMessage === 'object' && parsedMessage.type) {
-                        messageType = parsedMessage.type;
-                        payload = parsedMessage.payload || {};
-                        // Log the type AFTER potential decryption
-                        console.log(`Processing structured message of type: ${messageType} from ${peerId}`);
-                    } else {
-                        // Treat as plain text if JSON parsing doesn't yield a type, or if original wasn't JSON
-                        // This should be less common now with encryption wrapper
-                        messageType = 'text';
-                        payload = { text: (typeof parsedMessage === 'string' ? parsedMessage : event.data) }; // Use original data if parsing failed
-                        console.log(`Received plain text string or non-standard JSON from ${peerId}, wrapping.`);
-                    }
-                } catch (e) {
-                    // If JSON parsing fails initially (and it wasn't an encrypted wrapper)
-                    messageType = 'text';
-                    payload = { text: event.data };
-                    console.log(`Received non-JSON string from ${peerId}, wrapping.`);
-                }
-            } else {
-                console.warn(`Received message of unknown type from ${peerId}:`, typeof event.data);
-                return; // Ignore unknown types
-            }
+                        // Process cancellation
+                        const removed = state.removePendingIncomingRequest(originalSenderId); // Remove from state
+                        if (removed) {
+                            console.log(`[Friend Request] Removed pending incoming request from ${originalSenderId} due to cancellation.`);
+                            // --- NEW: Also remove the contact from the main contacts list --- 
+                            state.removeContact(originalSenderId);
+                            // --- END NEW ---
+                            ui.renderContactList(); // Re-render the entire list instead
+                            ui.addSystemMessage(`${state.contacts[originalSenderId]?.name || originalSenderId} 已取消其好友请求。`, null);
+                        } else {
+                             console.warn(`[Friend Request] State indicates pending request from ${originalSenderId} exists, but removal failed.`);
+                             // Might need a full UI re-render as fallback
+                             ui.renderContactList();
+                        }
+                        break;
+                    // --- END NEW ---
 
-            // --- Process based on messageType --- //
-            switch (messageType) {
-                case 'text':
-                     // --- NEW: Check if sender is a contact --- 
-                     if (!state.contacts[originalSenderId]) {
-                         console.warn(`Received text message from non-contact ${originalSenderId}. Ignoring and sending error.`);
-                         sendNotFriendError(originalSenderId); // Send feedback
-                         return; // Stop processing
-                     }
-                     // --- END NEW ---
+                    // --- NEW: Handle File Acknowledgement ---
+                    case 'file_ack':
+                        if (payload.transferId) {
+                            console.log(`Received file ACK for transfer ${payload.transferId} from ${originalSenderId}`);
+                            // Update UI for the sender to show the file was received.
+                            // We need a new UI function for this.
+                            ui.updateFileMessageStatusToReceived(originalSenderId, payload.transferId);
+                        } else {
+                            console.warn(`Received invalid file_ack from ${originalSenderId}: Missing transferId.`);
+                        }
+                        break;
+                    // --- END NEW ---
 
-                     // Decryption already happened if it was encrypted
-                    const messageToStore = {
-                        id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-                        senderId: originalSenderId, // Use originalSenderId here
-                        peerId: originalSenderId, // Use originalSenderId here
-                        type: 'text',
-                        payload: { text: payload.text }, // Ensure payload structure is consistent
-                        timestamp: payload.timestamp || Date.now() // Timestamp might be from encrypted payload
-                    };
-                    await storage.addMessage(messageToStore);
-                    console.log(`Stored text message from ${originalSenderId}:`, messageToStore);
-                    if (state.isActiveChat(originalSenderId)) {
-                        ui.displayMessage(originalSenderId, messageToStore);
-                    } else {
-                        ui.showUnreadIndicator(originalSenderId, true);
-                    }
-                    break;
+                    // --- NEW: Handle Not Friend Error --- 
+                    case 'not_friend_error':
+                        console.log(`Received 'not_friend_error' from ${originalSenderId}`);
+                        // Extract receiverId if needed, or just use originalSenderId
+                        handlePeerRemovedUs(originalSenderId); // NEW: Call dedicated handler
+                        break;
+                    // --- END NEW ---
 
-                // Other cases (fileMeta, typing, publicKey, friend_request, etc.)
-                // These are generally expected to be sent *before* shared key is established
-                // or are metadata that might not need encryption (like typing).
-                // publicKey MUST NOT be encrypted.
-                // For now, assume others are plaintext.
-
-                case 'fileMeta':
-                     // --- NEW: Check if sender is a contact --- 
-                     if (!state.contacts[originalSenderId]) {
-                         console.warn(`Received fileMeta from non-contact ${originalSenderId}. Ignoring and sending error.`);
-                         sendNotFriendError(originalSenderId); // Send feedback
-                         return; // Stop processing
-                     }
-                     // --- END NEW ---
-
-                    // Should fileMeta be encrypted? For now, assuming no.
-                    const fileInfo = payload;
-                    const messageForUi = {
-                        id: fileInfo.transferId || `file-${Date.now()}`,
-                        senderId: originalSenderId,
-                        peerId: originalSenderId,
-                        type: 'fileMeta',
-                        payload: fileInfo,
-                        timestamp: payload.timestamp || fileInfo.timestamp || Date.now()
-                    };
-                    await storage.addMessage(messageForUi);
-                    ui.displayMessage(originalSenderId, messageForUi);
-                    ui.showUnreadIndicator(originalSenderId, true);
-                    fileTransfer.handleIncomingFileMeta(originalSenderId, fileInfo);
-                    break;
-
-                case 'typing':
-                    // Typing indicators are low-value, maybe don't encrypt?
-                    console.log(`Received typing indicator from ${originalSenderId}:`, payload.isTyping);
-                    ui.showTypingIndicator(originalSenderId, payload.isTyping);
-                    break;
-
-                case 'publicKey':
-                    // Public key MUST be received in plaintext
-                    if (payload.jwk) {
-                        console.log(`Received public key from ${originalSenderId}`);
-                        await crypto.handlePublicKey(originalSenderId, payload.jwk);
-                    } else {
-                        console.warn(`Received invalid publicKey message from ${originalSenderId}: Missing jwk in payload.`);
-                    }
-                    break;
-
-                // Friend requests and responses - assumed plaintext for now
-                case 'friend_request':
-                    console.log(`[Friend Request] Received friend_request from ${originalSenderId}:`, payload);
-                    // Validate payload basics
-                    if (!payload.senderId || payload.senderId !== originalSenderId) {
-                        console.warn(`[Friend Request] Invalid senderId in request from ${originalSenderId}. Ignoring.`);
-                        return;
-                    }
-                    // Check if we already sent a request to them
-                    if (state.hasPendingOutgoingRequest(originalSenderId)) {
-                        console.log(`[Friend Request] Received request from ${originalSenderId}, to whom we already sent a request. Auto-accepting?`);
-                    }
-
-                    // Store incoming request state
-                    const requestData = {
-                        id: originalSenderId,
-                        name: payload.senderName || originalSenderId,
-                        timestamp: payload.timestamp || Date.now()
-                    };
-                    state.addPendingIncomingRequest(requestData);
-
-                    // Notify UI
-                    ui.renderContactList(); // Re-render to potentially show incoming request indicator
-                    ui.addSystemMessage(`${requestData.name} 请求添加您为好友。`, null); // Global notification for now
-                    break;
-
-                case 'friend_accept':
-                    console.log(`[Friend Request] Received friend_accept from ${originalSenderId}:`, payload);
-                    // Validate payload
-                    if (!payload.acceptorId || payload.acceptorId !== originalSenderId) {
-                        console.warn(`[Friend Request] Invalid acceptorId in accept message from ${originalSenderId}. Ignoring.`);
-                        return;
-                    }
-                    // Check if we actually sent a request
-                    if (!state.hasPendingOutgoingRequest(originalSenderId)) {
-                        console.warn(`[Friend Request] Received unexpected accept from ${originalSenderId}. Ignoring.`);
-                        return;
-                    }
-                    // Process acceptance
-                    state.removePendingOutgoingRequest(originalSenderId);
-                    const acceptorName = payload.acceptorName || originalSenderId;
-                    state.addContact(originalSenderId, acceptorName); // Add as contact
-
-                    // Update UI
-                    ui.renderContactList(); // Re-render to show as full contact
-                    ui.addSystemMessage(`${acceptorName} 已接受您的好友请求。`, null);
-                    // If chat is active, update header, etc.
-                    if (state.isActiveChat(originalSenderId)) {
-                        ui.updateChatHeader(originalSenderId);
-                        ui.updateChatInputVisibility();
-                    }
-                    break;
-
-                case 'friend_decline':
-                    console.log(`[Friend Request] Received friend_decline from ${originalSenderId}:`, payload);
-                     // Validate payload
-                    if (!payload.declinerId || payload.declinerId !== originalSenderId) {
-                        console.warn(`[Friend Request] Invalid declinerId in decline message from ${originalSenderId}. Ignoring.`);
-                        return;
-                    }
-                    // Check if we actually sent a request
-                    if (!state.hasPendingOutgoingRequest(originalSenderId)) {
-                        console.warn(`[Friend Request] Received unexpected decline from ${originalSenderId}. Ignoring.`);
-                        return;
-                    }
-                    // Process decline
-                    state.removePendingOutgoingRequest(originalSenderId);
-
-                    // Update UI
-                    ui.renderContactList(); // Re-render to remove pending state
-                    ui.addSystemMessage(`${state.contacts[originalSenderId]?.name || originalSenderId} 已拒绝您的好友请求。`, null);
-
-                    // Optional: Disconnect if still connected
-                    disconnectFromPeer(originalSenderId);
-                    break;
-
-                // --- NEW: Handle Friend Request Cancellation ---
-                case 'friend_cancel':
-                    console.log(`[Friend Request] Received friend_cancel from ${originalSenderId}:`, payload);
-                    // Validate payload
-                    if (!payload.cancellerId || payload.cancellerId !== originalSenderId) {
-                        console.warn(`[Friend Request] Invalid cancellerId in cancel message from ${originalSenderId}. Ignoring.`);
-                        return;
-                    }
-                    // Check if we have a pending incoming request from this user
-                    if (!state.hasPendingIncomingRequest(originalSenderId)) {
-                         console.warn(`[Friend Request] Received unexpected cancel from ${originalSenderId} (no pending incoming request found). Ignoring.`);
-                         return;
-                    }
-
-                    // Process cancellation
-                    const removed = state.removePendingIncomingRequest(originalSenderId); // Remove from state
-                    if (removed) {
-                        console.log(`[Friend Request] Removed pending incoming request from ${originalSenderId} due to cancellation.`);
-                        ui.removeIncomingRequestUI(originalSenderId); // Remove from UI
-                        ui.addSystemMessage(`${state.contacts[originalSenderId]?.name || originalSenderId} 已取消其好友请求。`, null);
-                    } else {
-                         console.warn(`[Friend Request] State indicates pending request from ${originalSenderId} exists, but removal failed.`);
-                         // Might need a full UI re-render as fallback
-                         ui.renderContactList();
-                    }
-                    break;
-                // --- END NEW ---
-
-                // --- NEW: Handle File Acknowledgement ---
-                case 'file_ack':
-                    if (payload.transferId) {
-                        console.log(`Received file ACK for transfer ${payload.transferId} from ${originalSenderId}`);
-                        // Update UI for the sender to show the file was received.
-                        // We need a new UI function for this.
-                        ui.updateFileMessageStatusToReceived(originalSenderId, payload.transferId);
-                    } else {
-                        console.warn(`Received invalid file_ack from ${originalSenderId}: Missing transferId.`);
-                    }
-                    break;
-                // --- END NEW ---
-
-                // --- NEW: Handle Not Friend Error --- 
-                case 'not_friend_error':
-                    console.log(`Received 'not_friend_error' from ${originalSenderId}`);
-                    // Extract receiverId if needed, or just use originalSenderId
-                    ui.showNotFriendError(originalSenderId); // Notify UI
-                    break;
-                // --- END NEW ---
-
-                // --- NEW: Handle Profile Info --- //
-                case 'profile_info':
-                    console.log(`[Profile] Received profile info from ${originalSenderId}:`, payload);
-                    if (payload && (payload.nickname || payload.avatar)) {
-                        const updated = state.updateContactDetails(originalSenderId, {
-                            nickname: payload.nickname,
-                            avatar: payload.avatar
-                        });
-                        console.log(`[Profile] state.updateContactDetails returned: ${updated}`);
-                        if (updated) {
-                            console.log(`[Profile] Updated contact details for ${originalSenderId}. Triggering UI update.`);
-                            // Re-render the entire contact list to show the updated name/avatar
-                            ui.renderContactList(); 
-                            // If this chat is currently active, also update the chat header
-                            if (state.isActiveChat(originalSenderId)) {
-                                ui.updateChatHeader(originalSenderId);
+                    // --- NEW: Handle Profile Info --- //
+                    case 'profile_info':
+                        console.log(`[Profile] Received profile info from ${originalSenderId}:`, payload);
+                        if (payload && (payload.nickname || payload.avatar)) {
+                            const updated = state.updateContactDetails(originalSenderId, {
+                                nickname: payload.nickname,
+                                avatar: payload.avatar
+                            });
+                            console.log(`[Profile] state.updateContactDetails returned: ${updated}`);
+                            if (updated) {
+                                console.log(`[Profile] Updated contact details for ${originalSenderId}. Triggering UI update.`);
+                                // Re-render the entire contact list to show the updated name/avatar
+                                ui.renderContactList(); 
+                                // If this chat is currently active, also update the chat header
+                                if (state.isActiveChat(originalSenderId)) {
+                                    ui.updateChatHeader(originalSenderId);
+                                }
+                            } else {
+                                 console.log(`[Profile] Received profile info for ${originalSenderId}, but no changes were applied.`);
                             }
                         } else {
-                             console.log(`[Profile] Received profile info for ${originalSenderId}, but no changes were applied.`);
+                            console.warn(`[Profile] Received profile_info message from ${originalSenderId} with invalid payload:`, payload);
                         }
-                    } else {
-                        console.warn(`[Profile] Received profile_info message from ${originalSenderId} with invalid payload:`, payload);
-                    }
-                    break;
-                // --- END NEW --- //
+                        break;
+                    // --- END NEW --- //
 
-                default:
-                    console.log(`Received unhandled structured message type: ${messageType} from ${originalSenderId}`);
-                    break;
+                    default:
+                        console.log(`Received unhandled structured message type: ${messageType} from ${originalSenderId}`);
+                        break;
+                }
+
+            } catch (e) {
+                console.error(`Error processing message from ${originalSenderId}:`, e);
+                 ui.addSystemMessage(`处理来自 ${state.contacts[originalSenderId]?.name || originalSenderId} 的消息时出错。`, originalSenderId, true);
             }
-
-        } catch (e) {
-            console.error(`Error processing message from ${originalSenderId}:`, e);
-             ui.addSystemMessage(`处理来自 ${state.contacts[originalSenderId]?.name || originalSenderId} 的消息时出错。`, originalSenderId, true);
+        } else {
+            console.warn(`Received message of unknown type from ${peerId}:`, typeof event.data);
+            return; // Ignore unknown types
         }
     };
 }
@@ -1022,31 +1136,34 @@ export function resetPeerConnection(peerId, reason = "Unknown") {
      }
     console.log(`[RESET] Resetting connection state for peer: ${peerId}. Reason: ${reason}`);
 
-    const pc = state.getPeerConnection(peerId);
-    const dc = state.getDataChannel(peerId);
+    // const pc = state.getPeerConnection(peerId);
+    // const dc = state.getDataChannel(peerId);
 
-    if (dc) {
-        try {
-            console.log(`Closing data channel for ${peerId}`);
-            dc.close();
-        } catch (e) { console.warn(`Error closing data channel for ${peerId}:`, e); }
-         state.removeDataChannel(peerId);
-    }
+    // if (dc) {
+    //     try {
+    //         console.log(`Closing data channel for ${peerId}`);
+    //         dc.close();
+    //     } catch (e) { console.warn(`Error closing data channel for ${peerId}:`, e); }
+    //      state.removeDataChannel(peerId);
+    // }
+    //
+    // if (pc) {
+    //     try {
+    //         console.log(`Closing PeerConnection for ${peerId}`);
+    //         pc.close();
+    //     } catch (e) { console.warn(`Error closing PeerConnection for ${peerId}:`, e); }
+    //      state.removePeerConnection(peerId);
+    // }
 
-    if (pc) {
-        try {
-            console.log(`Closing PeerConnection for ${peerId}`);
-            pc.close();
-        } catch (e) { console.warn(`Error closing PeerConnection for ${peerId}:`, e); }
-         state.removePeerConnection(peerId);
-    }
-
+    // Call state.resetPeerState which handles closing connections and clearing state maps
     state.resetPeerState(peerId);
 
+    // Update UI after state reset
     if (state.isActiveChat(peerId)) {
-        ui.updateChatInputVisibility();
+        ui.updateChatInputVisibility(); // Update based on possibly cleared active chat
     }
-     state.updateContactStatus(peerId, false);
+     // Ensure UI status is updated to reflect the reset state
+     state.updateContactStatus(peerId, false); // State might already be set, but ensures consistency
      ui.updateContactStatusUI(peerId, false);
 
      console.log(`Finished resetting connection for ${peerId}`);
@@ -1265,5 +1382,36 @@ function sendProfileInfo(peerId) {
     } else {
         console.warn(`[Profile] Cannot send profile info to ${peerId}: Data channel not open or available.`);
     }
+}
+// --- END NEW --- //
+
+// --- NEW: Handler for when peer indicates we are removed --- //
+function handlePeerRemovedUs(peerId) {
+    if (!state.contacts[peerId]) {
+        console.warn(`handlePeerRemovedUs called for non-contact: ${peerId}. Ignoring.`);
+        return;
+    }
+
+    const currentStatus = state.contacts[peerId].friendStatus;
+    if (currentStatus === 'removed_by_peer') {
+        console.log(`Already marked as removed_by_peer for ${peerId}. Ignoring redundant notification.`);
+        return; // Avoid redundant actions
+    }
+
+    const peerName = state.contacts[peerId].name || peerId;
+    console.log(`Handling 'removed_by_peer' status for ${peerName} (${peerId})`);
+
+    // 1. Update state
+    state.setContactFriendStatus(peerId, 'removed_by_peer');
+
+    // 2. Disconnect connection
+    resetPeerConnection(peerId, "Received not_friend_error");
+
+    // 3. Update UI (re-render the list for now)
+    // TODO: Optimize UI update to only change the appearance of this contact?
+    ui.renderContactList();
+
+    // 4. Show system message
+    ui.addSystemMessage(`${peerName} 已将您从好友列表中移除。您可以重新发送好友请求。`, null);
 }
 // --- END NEW --- //

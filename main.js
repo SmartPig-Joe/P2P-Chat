@@ -1,7 +1,7 @@
 // main.js
 import * as dom from './dom.js';
 import * as state from './state.js';
-import * as ui from './ui.js';
+import * as ui from './ui/index.js';
 import * as connection from './connection.js';
 import * as fileTransfer from './fileTransfer.js';
 import { TYPING_TIMER_LENGTH } from './constants.js';
@@ -134,31 +134,44 @@ async function handleAddContact() {
         return;
     }
 
-    // 1. Check if already a contact - COMMENTED OUT
-    /*
-    if (state.contacts[peerIdToAdd]) {
-        ui.addSystemMessage(`用户 ${state.contacts[peerIdToAdd].name || peerIdToAdd} 已经是您的联系人。`, null);
+    // --- MODIFIED: Check existing contact status --- //
+    const contact = state.contacts[peerIdToAdd];
+    let proceedToSendRequest = false;
+
+    if (contact) {
+        switch (contact.friendStatus) {
+            case 'confirmed':
+                ui.addSystemMessage(`您和 ${contact.name || peerIdToAdd} 已经是好友了。`, null);
+                return;
+            case 'pending_outgoing':
+                ui.addSystemMessage(`您已向 ${peerIdToAdd} 发送过好友请求，请等待对方确认。`, null);
+                return;
+            case 'pending_incoming':
+                ui.addSystemMessage(`用户 ${peerIdToAdd} 已向您发送好友请求，请在通知中处理。`, null);
+                // TODO: Ideally, highlight the incoming request in the UI here
+                return;
+            case 'removed_by_peer':
+                console.log(`[Friend Request] Contact ${peerIdToAdd} status is 'removed_by_peer'. Proceeding to re-send request.`);
+                proceedToSendRequest = true;
+                break;
+            default:
+                console.warn(`[Friend Request] Unknown friendStatus '${contact.friendStatus}' for contact ${peerIdToAdd}. Aborting.`);
+                return;
+        }
+    } else {
+        // Contact does not exist, proceed to send request
+        console.log(`[Friend Request] Contact ${peerIdToAdd} does not exist. Proceeding to send request.`);
+        proceedToSendRequest = true;
+    }
+
+    if (!proceedToSendRequest) {
+        // This should technically not be reached due to returns above, but as a safeguard.
+        console.warn(`[Friend Request] Logic error: proceedToSendRequest is false but function didn't return.`);
         return;
     }
-    */
+    // --- END MODIFICATION ---
 
-    // 2. Check if already sent a request
-    console.log(`[Debug] Checking hasPendingOutgoingRequest for ${peerIdToAdd}. Current set:`, new Set(state.pendingOutgoingRequests)); // Log current state
-    if (state.hasPendingOutgoingRequest(peerIdToAdd)) {
-        console.log(`[Debug] Found existing outgoing request for ${peerIdToAdd}. Returning.`); // Log result
-        ui.addSystemMessage(`您已向 ${peerIdToAdd} 发送过好友请求，请等待对方确认。`, null);
-        return;
-    }
-    console.log(`[Debug] No existing outgoing request found for ${peerIdToAdd}. Proceeding.`); // Log result
-
-    // 3. Check if there is an incoming request from this user
-    if (state.hasPendingIncomingRequest(peerIdToAdd)) {
-        ui.addSystemMessage(`用户 ${peerIdToAdd} 已向您发送好友请求，请在通知中处理。`, null);
-        // TODO: Ideally, highlight the incoming request in the UI here
-        return;
-    }
-
-    // 4. Attempt to connect to the peer
+    // 4. Attempt to connect to the peer (Original step numbering might be off now)
     ui.addSystemMessage(`正在尝试连接到 ${peerIdToAdd} 以发送好友请求...`, null);
     try {
         // connectToPeer now returns a Promise that resolves with the OPEN data channel
@@ -172,7 +185,8 @@ async function handleAddContact() {
             type: 'friend_request',
             payload: {
                 senderId: state.localUserId,
-                senderName: state.contacts[state.localUserId]?.name || state.localUserId,
+                // --- MODIFIED: Use local nickname directly --- //
+                senderName: state.localUserNickname, // Use state.localUserNickname
                 timestamp: Date.now()
             }
         };
@@ -180,12 +194,36 @@ async function handleAddContact() {
         // Send request via the now open DataChannel
         dc.send(JSON.stringify(requestMessage));
 
-        // Update local state and UI *after* successful send
-        state.addPendingOutgoingRequest(peerIdToAdd);
-        ui.renderContactList(); // Re-render list to show pending state
+        // --- MODIFIED: Update local state and UI --- //
+        if (contact && contact.friendStatus === 'removed_by_peer') {
+            // If re-sending request to a peer who removed us
+            state.setContactFriendStatus(peerIdToAdd, 'pending_outgoing');
+            console.log(`[Friend Request] Set friendStatus to 'pending_outgoing' for ${peerIdToAdd}`);
+        } else if (!contact) {
+             // If sending to a new peer (contact didn't exist before)
+             const added = state.addContact(peerIdToAdd, peerIdToAdd, 'pending_outgoing'); // Add with ID as name, status pending
+             if (!added) {
+                 console.error(`[Friend Request] Failed to add new contact ${peerIdToAdd} to state.`);
+                 // Consider showing an error message?
+             }
+             state.addPendingOutgoingRequest(peerIdToAdd); // Also add to the separate set for consistency
+             console.log(`[Friend Request] Added new contact ${peerIdToAdd} with status 'pending_outgoing'.`);
+        } else {
+             // This case should ideally not happen if logic above is correct
+             // (Should be confirmed, incoming, or pending_outgoing already handled)
+             console.warn(`[Friend Request] Sent request, but previous state was unexpected: ${contact.friendStatus}`);
+             state.addPendingOutgoingRequest(peerIdToAdd); // Ensure it's in the set anyway
+        }
+
+        console.log(`[handleAddContact] Friend request message sent successfully to ${peerIdToAdd}. Updating state and UI.`);
+        state.setContactFriendStatus(peerIdToAdd, 'pending_outgoing');
+        // --- NEW: Update contact list immediately to show pending state ---
+        console.log("[handleAddContact] Calling ui.renderContactList() to show pending outgoing.");
+        ui.renderContactList(); // Re-render list to show updated state (pending)
         ui.addSystemMessage(`已向 ${peerIdToAdd} 发送好友请求。`, null);
         dom.addContactInput.value = ''; // Clear input
         if (dom.addContactNameInput) dom.addContactNameInput.value = '';
+        // --- END MODIFICATION --- //
 
     } catch (connectError) {
         // Handle errors from connectToPeer (timeout, ICE failure, DC close/error, etc.)

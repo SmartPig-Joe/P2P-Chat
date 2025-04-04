@@ -1,8 +1,8 @@
 // crypto.js
 import { ECDH_PARAMS, AES_PARAMS, KEY_USAGE_ECDH, KEY_USAGE_AES } from './constants.js';
 import * as state from './state.js';
-import { addSystemMessage } from './ui.js'; // Need ui functions for error/status messages
-import { loadKeyPair, saveKeyPair } from './storage.js'; // Import storage functions
+import { addSystemMessage } from './ui/index.js'; // Need ui functions for error/status messages
+import * as storage from './storage.js'; // Import storage functions
 import { generateEncryptionKeyPair } from './utils.js'; // Import key generation utility
 
 // Function to reset connection state will be called from connection.js or main.js
@@ -19,7 +19,7 @@ export async function initializeCryptography() {
     let keyPair = null;
     try {
         // 1. Try loading existing key pair
-        keyPair = await loadKeyPair();
+        keyPair = await storage.loadKeyPair();
         if (keyPair) {
             console.log("Existing key pair loaded successfully.");
         } else {
@@ -29,7 +29,7 @@ export async function initializeCryptography() {
             if (keyPair) {
                 console.log("New key pair generated.");
                 // 3. Save the newly generated key pair
-                const saved = await saveKeyPair(keyPair);
+                const saved = await storage.saveKeyPair(keyPair);
                 if (saved) {
                     console.log("New key pair saved successfully.");
                 } else {
@@ -61,9 +61,6 @@ export async function initializeCryptography() {
 }
 
 // --- Key Management ---
-
-// Generate ECDH key pair (REMOVED - Functionality covered by initializeCryptography)
-// export async function generateAndStoreKeyPair() { ... }
 
 // Export public key in JWK format
 export async function exportPublicKey(key) {
