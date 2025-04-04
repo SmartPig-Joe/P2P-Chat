@@ -1,7 +1,7 @@
 // ui/messages.js
-import * as dom from '../dom.js';
-import * as state from '../state.js';
-import { escapeHTML, formatTime, getUserColorClass, formatBytes } from '../utils.js';
+import * as dom from '/src/dom.js';
+import * as state from '/src/state.js';
+import { escapeHTML, formatTime, getUserColorClass, formatBytes } from '/src/utils.js';
 import { getAvatarColor, addObjectURLToTrack, untrackAndRevokeObjectURL } from './main.js'; // Import from ui/main.js
 import { updateEmptyState } from './chatArea.js';
 import { showUnreadIndicator } from './contactList.js'; // Needed for inactive chat message handling

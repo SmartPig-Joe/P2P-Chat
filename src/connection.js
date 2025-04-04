@@ -1,7 +1,7 @@
 // connection.js
 import * as state from './state.js';
 import { SIGNALING_SERVER_URL, PEER_CONNECTION_CONFIG } from './constants.js';
-import * as ui from './ui/index.js';
+import * as ui from '../ui/index.js';
 import * as crypto from './crypto.js';
 import * as fileTransfer from './fileTransfer.js';
 // import * as dom from './dom.js'; // Needed for updating UI elements based on WS state

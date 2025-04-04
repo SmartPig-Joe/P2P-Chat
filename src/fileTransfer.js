@@ -2,11 +2,11 @@
 // import * as dom from './dom.js';
 // import * as storage from './storage.js';
 import * as state from './state.js';
-import * as ui from './ui/index.js';
+import * as ui from '../ui/index.js';
 import { FILE_CHUNK_SIZE } from './constants.js';
 import { escapeHTML, formatBytes } from './utils.js';
-// import { getSelectedPeerId, updateFileMessageProgress } from './ui/index.js'; // Directly import needed functions if preferred
-import { updateFileMessageProgress } from './ui/index.js'; // Keep only used import
+// import { getSelectedPeerId, updateFileMessageProgress } from '../ui/index.js'; // Corrected path (commented)
+import { updateFileMessageProgress } from '../ui/index.js'; // Corrected path
 
 // --- Sending Files ---
 

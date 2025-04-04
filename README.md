@@ -32,6 +32,7 @@
 *   **状态管理**: 使用专门的 `state.js` 模块集中管理应用状态。
 *   **代码模块化**: 使用 ES6 模块将 JavaScript 代码拆分为多个文件（例如 `main.js`, `connection.js`, `crypto.js`, `ui.js`, `fileTransfer.js`, `storage.js` 等），提高了代码的可维护性。
 *   **本地存储**: 使用 `localStorage` 持久化联系人列表和聊天记录。
+*   **数据存储:** IndexedDB for client-side storage of messages and keys.
 
 ## 技术栈
 
@@ -118,5 +119,36 @@
 ---
 
 欢迎对此项目进行贡献或提出改进建议！
+
+### 项目结构
+
+```
+.
+├── index.html          # 主 HTML 文件
+├── style.css           # 主 CSS 样式文件
+├── README.md           # 项目说明文件
+├── .gitattributes      # Git 属性文件
+├── src/                # 核心逻辑代码目录
+│   ├── connection.js   # WebSocket 连接管理
+│   ├── crypto.js       # 加密/解密逻辑
+│   ├── db.js           # IndexedDB 数据库操作
+│   ├── dom.js          # DOM 操作辅助函数
+│   ├── fileTransfer.js # 文件传输逻辑
+│   ├── main.js         # 应用主入口和初始化
+│   ├── state.js        # 应用状态管理
+│   └── utils.js        # 通用辅助函数
+├── ui/                 # 用户界面相关代码目录
+│   ├── chatArea.js     # 聊天区域 UI 管理
+│   ├── contactList.js  # 联系人列表 UI 管理
+│   ├── contextMenu.js  # 右键菜单逻辑
+│   ├── index.js        # UI 模块入口
+│   ├── main.js         # UI 主逻辑
+│   ├── messages.js     # 消息显示和管理
+│   └── profile.js      # 用户资料 UI
+├── fonts/              # 字体文件目录
+├── server/             # 后端服务器代码目录
+│   └── server.js       # WebSocket 服务器实现
+└── .git/               # Git 仓库目录 (通常不包含在结构图中)
+```
 
  

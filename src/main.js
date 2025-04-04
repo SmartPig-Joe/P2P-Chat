@@ -1,7 +1,7 @@
 // main.js
 import * as dom from './dom.js';
 import * as state from './state.js';
-import * as ui from './ui/index.js';
+import * as ui from '../ui/index.js';
 import * as connection from './connection.js';
 import * as fileTransfer from './fileTransfer.js';
 import { TYPING_TIMER_LENGTH } from './constants.js';
