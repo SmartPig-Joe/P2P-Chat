@@ -68,7 +68,8 @@ export function addSystemMessage(text, peerId = null, isError = false) {
 
 // --- NEW: Show error when message sent to someone who removed you ---
 export function showNotFriendError(peerId) {
-    const contactName = state.contacts[peerId]?.name || peerId; // Get sender's name (who sent the error)
+    const contacts = state.getContacts(); // USE GETTER
+    const contactName = contacts[peerId]?.name || peerId; // Use getter result
     const errorMessage = `您的消息未能发送，因为 ${escapeHTML(contactName)} 已将您从好友列表移除。`;
     addSystemMessage(errorMessage, peerId, true); // Show error in the specific chat window
 }
@@ -103,9 +104,10 @@ function createMessageHTML(message) {
 
     if (senderId) {
         isLocal = senderId === state.localUserId;
+        const contacts = state.getContacts(); // USE GETTER
         senderName = isLocal
-            ? state.localUserNickname // Use the state variable
-            : (state.contacts[senderId]?.name || senderId);
+            ? state.getLocalUserNickname() // USE GETTER
+            : (contacts[senderId]?.name || senderId); // Use getter result
     } else {
         console.warn('Message object missing senderId:', message);
         senderId = 'unknown'; // Assign a default ID for color/avatar generation
@@ -152,7 +154,7 @@ function createMessageHTML(message) {
 
     // Use local user info for self-avatar
     const avatarSrc = isLocal
-        ? ((state.localUserAvatar && state.localUserAvatar !== 'default_avatar.png') ? escapeHTML(state.localUserAvatar) : `https://placehold.co/40x40/${getAvatarColor(senderId)}/ffffff?text=${escapeHTML(senderName.charAt(0).toUpperCase())}`) // Use state avatar if valid, else fallback
+        ? ((state.getLocalUserAvatar() && state.getLocalUserAvatar() !== 'default_avatar.png') ? escapeHTML(state.getLocalUserAvatar()) : `https://placehold.co/40x40/${getAvatarColor(senderId)}/ffffff?text=${escapeHTML(senderName.charAt(0).toUpperCase())}`) // Use state avatar if valid, else fallback - USE GETTER
         : `https://placehold.co/40x40/${avatarColor}/ffffff?text=${escapeHTML(senderName.charAt(0).toUpperCase())}`; // Default for others
 
     return (
@@ -196,7 +198,10 @@ export function displayMessage(peerId, message) {
         updateEmptyState();
     } else if (peerId !== activePeerId) {
         // If message is for an inactive chat, just ensure the unread indicator is shown
-         console.log(`Message received for inactive chat ${peerId}, showing indicator.`);
+         console.log(`Message received for inactive chat ${peerId}, setting unread state and showing indicator.`);
+         // NEW: Set unread state
+         state.setHasUnreadMessages(peerId, true);
+         // END NEW
          showUnreadIndicator(peerId, true); // Ensure indicator is on
     }
 }

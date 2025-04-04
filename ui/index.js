@@ -35,7 +35,6 @@ import {
     renderContactList,
     updateContactStatusUI,
     showUnreadIndicator,
-    handleContactClick,
     updateContactName,
 } from './contactList.js';
 
@@ -81,7 +80,6 @@ export {
     renderContactList,
     updateContactStatusUI,
     showUnreadIndicator,
-    handleContactClick,
     updateContactName,
 
     // Profile

@@ -28,7 +28,8 @@ export function handleFileSelect(event) {
     if (connectionStatus !== 'connected' || !dataChannel || dataChannel.readyState !== 'open') {
         const errorMsg = `Cannot send file to ${activePeerId}. State: ${connectionStatus}, DC exists: ${!!dataChannel}, DC state: ${dataChannel?.readyState}`;
         console.warn(`[Debug] handleFileSelect: ${errorMsg}`);
-        ui.addSystemMessage(`无法发送文件：未连接到 ${state.contacts[activePeerId]?.name || activePeerId} 或数据通道未就绪。`, activePeerId, true);
+        const contacts = state.getContacts(); // USE GETTER
+        ui.addSystemMessage(`无法发送文件：未连接到 ${contacts[activePeerId]?.name || activePeerId} 或数据通道未就绪。`, activePeerId, true); // Use getter result
         if (event.target) event.target.value = null;
         return;
     }
@@ -237,7 +238,7 @@ export function handleIncomingFileMeta(senderId, fileInfo) {
     const transferId = fileInfo.transferId;
     console.log(`Received fileMeta for ${transferId} from ${senderId}:`, fileInfo);
 
-    const currentIncomingFiles = state.incomingFiles;
+    const currentIncomingFiles = state.getIncomingFiles(); // USE GETTER
     if (currentIncomingFiles[transferId]) {
         console.warn(`Received duplicate fileMeta for transfer ID: ${transferId}. Ignoring.`);
         return;
@@ -250,7 +251,7 @@ export function handleIncomingFileMeta(senderId, fileInfo) {
         receivedSize: 0,
         peerId: senderId // Store peerId explicitly for easier lookup
     };
-    state.setIncomingFiles({...currentIncomingFiles}); // Update state
+    state.setIncomingFiles({...currentIncomingFiles}); // Update state USING SETTER
 
     // Display placeholder/message in UI (ui.displayMessage handles this)
     // The 'fileMeta' message is already passed to ui.displayMessage in connection.js
@@ -290,7 +291,7 @@ export function handleIncomingDataChunk(peerId, arrayBuffer) {
         const chunkData = arrayBuffer.slice(separatorIndex + 1);
         const transferId = new TextDecoder().decode(idBuffer);
 
-        const currentIncomingFiles = state.incomingFiles;
+        const currentIncomingFiles = state.getIncomingFiles(); // USE GETTER
         const fileData = currentIncomingFiles[transferId];
 
         // Check if transfer exists and is associated with the correct peer
@@ -307,7 +308,7 @@ export function handleIncomingDataChunk(peerId, arrayBuffer) {
              // Clean up partially received file
              if (currentIncomingFiles[transferId]) {
                  delete currentIncomingFiles[transferId];
-                 state.setIncomingFiles({...currentIncomingFiles});
+                 state.setIncomingFiles({...currentIncomingFiles}); // USE SETTER
                  // Update UI to show failure only if it's the active chat
                  if (peerId === state.getActiveChatPeerId()) {
                     ui.updateFileMessageProgress(peerId, transferId, -1);
@@ -345,7 +346,7 @@ export function handleIncomingDataChunk(peerId, arrayBuffer) {
             }
              // Clean up state regardless of assembly success/failure
              delete currentIncomingFiles[transferId];
-             state.setIncomingFiles({...currentIncomingFiles});
+             state.setIncomingFiles({...currentIncomingFiles}); // USE SETTER
              console.log(`[${transferId}] Cleaned up incoming file data from state.`);
         }
 

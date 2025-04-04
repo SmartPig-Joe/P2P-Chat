@@ -220,11 +220,13 @@ export async function handlePublicKey(peerId, peerPublicKeyJwk) {
 
         console.log(`Shared key derived and stored successfully for peer ${peerId}.`);
         // Potentially trigger UI update or other logic now that secure channel is ready
-        addSystemMessage(`与 ${state.contacts[peerId]?.name || peerId} 的端到端加密已建立。`, peerId);
+        const contacts = state.getContacts();
+        addSystemMessage(`与 ${contacts[peerId]?.name || peerId} 的端到端加密已建立。`, peerId);
 
     } catch (error) {
         console.error(`Error handling peer public key for ${peerId}:`, error);
-        addSystemMessage(`处理 ${state.contacts[peerId]?.name || peerId} 的公钥并建立安全连接时出错。`, peerId, true);
+        const contacts = state.getContacts();
+        addSystemMessage(`处理 ${contacts[peerId]?.name || peerId} 的公钥并建立安全连接时出错。`, peerId, true);
         // Consider resetting the connection here if key exchange fails
         // connection.resetPeerConnection(peerId); // Example call if connection module was imported
     }

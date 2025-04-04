@@ -36,7 +36,8 @@ export function showTypingIndicator(peerId, isTyping) {
     if (dom.typingIndicator && dom.typingUsersSpan) {
         // Only show indicator if the typing peer is the currently selected chat
         if (peerId === activePeerId && isTyping) {
-            const typerName = state.contacts[peerId]?.name || peerId || '对方';
+            const contacts = state.getContacts();
+            const typerName = contacts[peerId]?.name || peerId || '对方';
             dom.typingUsersSpan.textContent = escapeHTML(typerName);
             dom.typingIndicator.classList.remove('hidden');
             dom.typingIndicator.classList.add('flex');
@@ -69,7 +70,8 @@ export function updateChatHeader(peerId) {
         return;
     }
 
-    const contact = state.contacts[peerId];
+    const contacts = state.getContacts();
+    const contact = contacts[peerId];
     const name = contact?.name || peerId;
     let statusText = '';
     let statusClass = 'text-xs text-discord-text-muted';

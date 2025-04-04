@@ -177,10 +177,34 @@ export async function switchToChat(peerId) {
     // For now, assume connection is imported in ui/main.js (it is)
     await connection.loadAndDisplayHistory(peerId);
 
+    // --- NEW: Attempt to connect if not already connected/connecting ---
+    const connectionState = state.getConnectionState(peerId);
+    console.log(`[UI Switch] Connection state for ${peerId}: ${connectionState}`);
+    if (connectionState !== 'connected' && connectionState !== 'connecting') {
+        console.log(`[UI Switch] Connection needed for ${peerId}. Attempting to connect...`);
+        try {
+            // Use await to ensure the connection attempt is initiated before proceeding,
+            // though the connection itself is asynchronous.
+            await connection.connectToPeer(peerId);
+            console.log(`[UI Switch] connectToPeer called for ${peerId}.`);
+            // Note: The UI update for "connecting" status should be handled
+            // by the events triggered within connection.js (e.g., setConnectionState)
+        } catch (error) {
+            console.error(`[UI Switch] Error attempting to connect to ${peerId}:`, error);
+            // Use addSystemMessage from messages.js (already imported)
+            addSystemMessage(peerId, `Error trying to connect: ${escapeHTML(error.message)}`);
+        }
+    } else {
+        console.log(`[UI Switch] No connection attempt needed for ${peerId} (State: ${connectionState}).`);
+    }
+    // --- END NEW ---
+
     // --- Mark messages as read ---
-    if (state.contacts[peerId]) {
+    const contacts = state.getContacts(); // USE GETTER
+    if (contacts[peerId]) { // Use getter result
         // state.contacts[peerId].hasUnread = false; // Logic depends on state implementation
         // TODO: Call state function to mark as read
+        state.setHasUnreadMessages(peerId, false); // Use the state function here
     }
     showUnreadIndicator(peerId, false); // Hide the red dot immediately
 

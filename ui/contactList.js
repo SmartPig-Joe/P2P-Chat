@@ -36,7 +36,8 @@ function getStatusIndicatorHTML(status, peerId = null, name = null) {
 // Re-renders the entire contact list based on state.contacts and pending requests
 export function renderContactList() {
     console.log('[renderContactList] Function called.'); // Add simple log
-    console.log(`[renderContactList] Rendering with contacts state:`, JSON.parse(JSON.stringify(state.contacts))); // Deep copy for logging
+    const contacts = state.getContacts(); // USE GETTER
+    console.log(`[renderContactList] Rendering with contacts state:`, JSON.parse(JSON.stringify(contacts))); // Deep copy for logging
     if (!dom.contactsListContainer) {
         console.error("[renderContactList] contactsListContainer not found!");
         return;
@@ -52,7 +53,7 @@ export function renderContactList() {
         removed_by_peer: [] // Group for those who removed us but are kept in the list
     };
 
-    Object.values(state.contacts).forEach(contact => {
+    Object.values(contacts).forEach(contact => { // USE GETTER RESULT
         if (groups[contact.friendStatus]) {
             groups[contact.friendStatus].push(contact);
         } else {
@@ -112,9 +113,10 @@ export function renderContactList() {
              }
              // Show unread indicator (only if confirmed friend?)
              if (contact.friendStatus === 'confirmed') {
-                // showUnreadIndicator(contact.id, contact.hasUnread ?? false);
-                // TODO: Re-enable unread indicator logic after checking state.hasUnreadMessages
-                console.warn("Unread indicator logic temporarily disabled pending state.hasUnreadMessages check.");
+                 // Retrieve unread status from state
+                 const hasUnread = state.getHasUnreadMessages(contact.id);
+                 showUnreadIndicator(contact.id, hasUnread, contactElement); // Pass element for direct update
+                 // console.warn("Unread indicator logic temporarily disabled pending state.hasUnreadMessages check.");
              }
         });
          dom.contactsListContainer.appendChild(container);
@@ -298,7 +300,8 @@ function createPendingOutgoingElement(contact) { // Changed parameter
 
 async function handleAcceptRequest(peerId) {
     console.log(`[Friend Request] Accepting request from ${peerId}`);
-    const contact = state.contacts[peerId]; // Get contact from state
+    const contacts = state.getContacts(); // USE GETTER
+    const contact = contacts[peerId]; // Get contact from state using getter result
     if (!contact || contact.friendStatus !== 'pending_incoming') {
          console.warn(`Cannot accept request for ${peerId}, status is not pending_incoming.`);
          return;
@@ -343,7 +346,8 @@ async function handleAcceptRequest(peerId) {
 
 async function handleDeclineRequest(peerId) {
     console.log(`[Friend Request] Declining request from ${peerId}`);
-    const contact = state.contacts[peerId];
+    const contacts = state.getContacts(); // USE GETTER
+    const contact = contacts[peerId]; // Get contact from state using getter result
      if (!contact || contact.friendStatus !== 'pending_incoming') {
          console.warn(`Cannot decline request for ${peerId}, status is not pending_incoming.`);
          return;
@@ -371,7 +375,8 @@ async function handleDeclineRequest(peerId) {
 
 async function handleCancelRequest(peerId) {
     console.log(`[Friend Request] Cancelling outgoing request to ${peerId}`);
-    const contact = state.contacts[peerId];
+    const contacts = state.getContacts(); // USE GETTER
+    const contact = contacts[peerId]; // Get contact from state using getter result
      if (!contact || contact.friendStatus !== 'pending_outgoing') {
         console.warn(`Cannot cancel request for ${peerId}, status is not pending_outgoing.`);
         return;
@@ -439,71 +444,52 @@ export function updateContactStatusUI(peerId, status) { // status: boolean | 'co
     }
 }
 
-// Shows or hides the unread message indicator for a contact (only for confirmed friends)
-export function showUnreadIndicator(peerId, show) {
-    if (!dom.contactsListContainer) return;
-    const contactElement = dom.contactsListContainer.querySelector(`.contact-item.confirmed-contact[data-peer-id="${peerId}"]`); // Target only confirmed
+// Show or hide the unread indicator for a specific contact
+// Can accept the contact element directly to avoid repeated queries
+export function showUnreadIndicator(peerId, show, contactElement = null) {
+    if (!contactElement) {
+        contactElement = dom.contactsListContainer?.querySelector(`.contact-item[data-peer-id="${peerId}"]`);
+    }
     if (contactElement) {
         const indicator = contactElement.querySelector('.unread-indicator');
         if (indicator) {
-            const shouldBeHidden = !show;
-            if (indicator.classList.contains('hidden') !== shouldBeHidden) {
-                 indicator.classList.toggle('hidden', shouldBeHidden);
-                 console.log(`Set unread indicator for ${peerId} to ${show}`);
-            }
+            indicator.classList.toggle('hidden', !show);
+            // console.log(`Unread indicator for ${peerId} set to ${show ? 'visible' : 'hidden'}`);
+        } else {
+            console.warn(`Unread indicator element not found for peerId: ${peerId}`);
         }
+    } else {
+         console.warn(`Contact list item element not found for peerId: ${peerId} when trying to update unread indicator.`);
     }
 }
 
-// Handles clicking on a contact in the list - Now only triggers for allowed types
-export async function handleContactClick(event) {
-    const targetElement = event.currentTarget;
-    const contactType = targetElement.dataset.contactType;
+// Handles clicking on a contact in the list (Switching chat)
+function handleContactClick(event) {
+    const element = event.currentTarget;
+    const peerId = element.dataset.peerId;
+    const contactType = element.dataset.contactType;
 
-    // --- MODIFIED: Only allow clicks on 'confirmed' contacts ---
+    if (!peerId) {
+        console.error("Clicked contact item missing peerId data attribute.");
+        return;
+    }
+
+    // Only allow switching chat for confirmed contacts
     if (contactType !== 'confirmed') {
-        console.log(`Clicked on a non-confirmed contact (Type: ${contactType}). Ignoring chat switch.`);
-        return;
-    }
-    // --- END MODIFICATION ---
-
-    const clickedPeerId = targetElement.dataset.peerId;
-    const currentActivePeerId = state.getActiveChatPeerId();
-
-    if (!clickedPeerId || clickedPeerId === currentActivePeerId) {
-        console.log(`Clicked same peer (${clickedPeerId}) or invalid target.`);
+        console.log(`Clicked non-confirmed contact: ${peerId}, type: ${contactType}. Ignoring click for chat switch.`);
+        // You might want different behavior for clicking pending/removed contacts,
+        // but for now, it doesn't switch the chat view.
         return;
     }
 
-    console.log(`Confirmed contact clicked: ${clickedPeerId}`);
+    console.log(`Switching active chat to: ${peerId}`);
 
-    // --- NEW: Call the centralized switch function --- 
-    await switchToChat(clickedPeerId);
-    // --- END NEW ---
+    // Clear unread status when switching to this chat
+    state.setHasUnreadMessages(peerId, false);
+    showUnreadIndicator(peerId, false, element); // Hide indicator immediately
 
-    // Check connection status AFTER switching UI
-    const connectionStatus = state.getConnectionState(clickedPeerId);
-    const needsConnectionAttempt = (connectionStatus !== 'connected' && connectionStatus !== 'connecting');
-
-    // Initiate connection if needed and signaling is up
-    if (needsConnectionAttempt) {
-        if (!state.isSignalingConnected()) {
-            console.warn(`Cannot connect to ${clickedPeerId}: Signaling server disconnected.`);
-            addSystemMessage(`暂时无法连接到 ${state.contacts[clickedPeerId]?.name || clickedPeerId}：信令服务器未连接。`, null, true);
-        } else {
-            console.log(`Contact ${clickedPeerId} is ${connectionStatus}. Attempting to connect...`);
-            try {
-                connection.connectToPeer(clickedPeerId).catch(err => {
-                    console.error(`[handleContactClick] connectToPeer failed for ${clickedPeerId}:`, err);
-                    // UI already switched, just show error
-                    addSystemMessage(`尝试连接到 ${state.contacts[clickedPeerId]?.name || clickedPeerId} 失败: ${err.message}`, clickedPeerId, true);
-                });
-            } catch (e) {
-                console.error(`Failed to initiate connection via click to ${clickedPeerId}:`, e);
-                addSystemMessage(`无法发起与 ${state.contacts[clickedPeerId]?.name || clickedPeerId} 的连接。`, clickedPeerId, true);
-            }
-        }
-    }
+    // Use the centralized function from main.js
+    switchToChat(peerId);
 }
 
 // Updates the display name and avatar, considers contact type

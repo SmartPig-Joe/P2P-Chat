@@ -39,7 +39,8 @@ export function showContextMenu(event, peerId) {
         return;
     }
 
-    const contact = state.contacts[peerId];
+    const contacts = state.getContacts(); // USE GETTER
+    const contact = contacts[peerId]; // Use getter result
     const name = contact?.name || peerId;
 
     // Populate the menu
@@ -207,7 +208,8 @@ function hideContextMenuOnClickOutside(event) {
 async function handleDeleteContact(peerId) {
     if (!peerId) return;
 
-    const contact = state.contacts[peerId];
+    const contacts = state.getContacts(); // USE GETTER
+    const contact = contacts[peerId]; // Use getter result
     if (!contact) {
          console.warn(`handleDeleteContact called for non-contact ID: ${peerId}`);
          return;
@@ -270,7 +272,8 @@ async function handleClearHistory(peerId) {
         return;
     }
 
-    const contact = state.contacts[peerId];
+    const contacts = state.getContacts(); // USE GETTER
+    const contact = contacts[peerId]; // Use getter result
     const name = contact?.name || peerId;
 
     if (confirm(`您确定要清空与 "${escapeHTML(name)}" 的本地聊天记录吗？\n此操作不可恢复。`)) {

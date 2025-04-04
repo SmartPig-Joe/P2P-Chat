@@ -49,7 +49,8 @@ function handleSendMessage(event) {
 
     if (connectionState !== 'connected' || !dataChannel || dataChannel.readyState !== 'open') {
          console.warn(`Cannot send message: Not connected or data channel not open for peer ${activePeerId}. State: ${connectionState}, DC: ${dataChannel?.readyState}`);
-         ui.addSystemMessage(`无法发送消息：与 ${state.contacts[activePeerId]?.name || activePeerId} 的连接未建立或已断开。`, activePeerId, true); // Target message to active peer
+         const contacts = state.getContacts(); // USE GETTER
+         ui.addSystemMessage(`无法发送消息：与 ${contacts[activePeerId]?.name || activePeerId} 的连接未建立或已断开。`, activePeerId, true); // Target message to active peer
          return;
     }
 
@@ -135,7 +136,8 @@ async function handleAddContact() {
     }
 
     // --- MODIFIED: Check existing contact status --- //
-    const contact = state.contacts[peerIdToAdd];
+    const contacts = state.getContacts(); // USE GETTER
+    const contact = contacts[peerIdToAdd]; // Use contacts from getter
     let proceedToSendRequest = false;
 
     if (contact) {
